@@ -63,6 +63,13 @@ button {
   font-size: 1.06rem;
 }
 
+.security-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 16px;
+}
+
 .login-panel {
   width: 100%;
   padding: 24px;
@@ -114,6 +121,33 @@ button {
   background: transparent;
   color: #1a1a1a;
   font: inherit;
+}
+
+.forgot-password-section {
+  display: flex;
+  justify-content: center;
+  margin-top: 8px;
+}
+
+.text-button {
+  background: none;
+  border: none;
+  color: #0576ec;
+  cursor: pointer;
+  font-size: 0.9rem;
+  font-weight: 600;
+  padding: 0;
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+}
+
+.text-button:hover {
+  color: #0456b8;
+}
+
+.text-button:active {
+  color: #0345a0;
 }
 
 .icon-button,
@@ -251,6 +285,22 @@ button {
   display: grid;
   gap: 10px;
   margin-top: auto;
+}
+
+.sidebar-user-info {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.sidebar-user-info strong {
+  color: #ffffff;
+  font-weight: 600;
+}
+
+.sidebar-user-info small {
+  color: #b0b4c0;
+  font-size: 0.85rem;
 }
 
 .sidebar-footer .connection-state {
@@ -662,9 +712,9 @@ button {
 .requests-empty {
   display: grid;
   grid-template-columns:
-    minmax(92px, 0.8fr) minmax(170px, 1.45fr) minmax(120px, 1fr)
-    minmax(100px, 0.85fr) minmax(104px, 0.8fr) minmax(120px, 0.95fr)
-    minmax(90px, 0.7fr);
+    minmax(92px, 0.75fr) minmax(170px, 1.35fr) minmax(120px, 0.95fr)
+    minmax(100px, 0.8fr) minmax(140px, 1fr) minmax(104px, 0.75fr)
+    minmax(120px, 0.9fr) minmax(90px, 0.65fr);
   gap: 12px;
   align-items: center;
   min-height: 52px;
@@ -701,6 +751,104 @@ button {
   grid-template-columns: 1fr;
   color: #999999;
   font-size: 0.92rem;
+}
+
+.admin-stack {
+  display: grid;
+  gap: 16px;
+  margin-top: 16px;
+}
+
+.admin-table {
+  overflow: hidden;
+  border: 1px solid rgba(24, 33, 31, 0.12);
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.admin-row,
+.admin-empty {
+  display: grid;
+  grid-template-columns:
+    minmax(150px, 1.2fr) minmax(170px, 1.2fr) minmax(130px, 0.9fr)
+    minmax(150px, 1.1fr) minmax(110px, 0.7fr) minmax(110px, 0.7fr);
+  gap: 12px;
+  align-items: center;
+  min-height: 52px;
+  padding: 0 14px;
+  border-top: 1px solid rgba(24, 33, 31, 0.08);
+}
+
+.admin-users-table .admin-row,
+.admin-users-table .admin-empty {
+  grid-template-columns:
+    minmax(180px, 1.25fr) minmax(160px, 1.1fr) minmax(110px, 0.75fr)
+    minmax(130px, 0.9fr) minmax(90px, 0.6fr) minmax(90px, 0.65fr);
+}
+
+.admin-row:first-child {
+  border-top: 0;
+}
+
+.admin-head {
+  min-height: 44px;
+  border-top: 0;
+  background: #dddee8;
+  color: #1a1a1a;
+  font-size: 0.8rem;
+  font-weight: 800;
+}
+
+.admin-row span,
+.admin-row strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.admin-row strong {
+  color: #1a1a1a;
+}
+
+.admin-empty {
+  grid-template-columns: 1fr;
+  color: #999999;
+  font-size: 0.92rem;
+}
+
+.checkbox-control input {
+  width: 20px;
+  min-height: 20px;
+}
+
+.settings-panel {
+  display: grid;
+  gap: 16px;
+  max-width: 720px;
+  padding: 18px;
+  border: 1px solid rgba(5, 118, 236, 0.18);
+  border-radius: 8px;
+  background: #f9f7ee;
+}
+
+.signature-preview {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 150px;
+  padding: 16px;
+  border: 1px dashed rgba(5, 10, 124, 0.2);
+  border-radius: 8px;
+  background: #ffffff;
+  color: #999999;
+}
+
+.signature-preview img {
+  display: block;
+  max-width: min(100%, 420px);
+  max-height: 120px;
+  object-fit: contain;
 }
 
 .status-badge {
@@ -1282,6 +1430,14 @@ button {
   background: #ffffff;
 }
 
+.processing-approver-signature {
+  display: block;
+  width: 180px;
+  max-height: 64px;
+  margin: 0 auto 2px;
+  object-fit: contain;
+}
+
 @media (max-width: 860px) {
   .login-shell {
     grid-template-columns: 1fr;
@@ -1326,7 +1482,15 @@ button {
   }
 
   .requests-row {
-    min-width: 820px;
+    min-width: 980px;
+  }
+
+  .admin-table {
+    overflow-x: auto;
+  }
+
+  .admin-row {
+    min-width: 980px;
   }
 
   .topbar {
@@ -1786,6 +1950,17 @@ button {
   .processing-authority {
     align-items: start;
     margin-top: 16pt;
+  }
+
+  .processing-authority > div {
+    width: 170pt;
+    text-align: center;
+  }
+
+  .processing-approver-signature {
+    width: 150pt;
+    max-height: 46pt;
+    margin: 0 auto 1pt;
   }
 
   .processing-authority strong {

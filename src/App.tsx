@@ -36,6 +36,9 @@ import {
 import {
   AppsScriptConfigurationError,
   type AppsScriptConnectionState,
+  type AdminUser,
+  type AdminUserInput,
+  type AppSettings,
   type AuthenticatedUser,
   type BackendHealth,
   type ComakerLoan,
@@ -50,6 +53,7 @@ import {
   type NewOtherLoan,
   type NewSecurity,
   approveLoanRequest,
+  changePassword,
   checkBackendHealth,
   createLoanRequest,
   disapproveLoanRequest,
@@ -57,12 +61,18 @@ import {
   getLoanRequestDetails,
   getComakerLoans,
   getLoanTypes,
+  getSettings,
+  listAuditLogs,
   listLoanRequests,
+  listUsers,
   loginUser,
   returnLoanRequest,
   returnLoanRequestToManager,
   searchMembers,
+  sendPasswordRecovery,
+  saveUser,
   updateLoanRequest,
+  updateSettings,
 } from './services/appsScriptClient';
 import {
   googleAppsScriptConfig,
@@ -76,8 +86,10 @@ type StatusCopy = {
 
 type BackendRow = [label: string, value: string];
 type DashboardKind = 'teller' | 'manager' | 'approver';
-type PageKind = 'login' | DashboardKind;
+type UserDashboardKind = DashboardKind | 'admin';
+type PageKind = 'login' | UserDashboardKind;
 type DashboardView = LoanRequestListPayload['view'];
+type AdminView = 'audit' | 'users' | 'settings';
 
 type DashboardMenu = {
   id: DashboardView;
@@ -93,6 +105,21 @@ type DashboardConfig = {
   menus: DashboardMenu[];
 };
 
+type AdminMenu = {
+  id: AdminView;
+  label: string;
+  description: string;
+  icon: LucideIcon;
+};
+
+type AdminDashboardProps = {
+  activeStatus: StatusCopy;
+  connectionState: AppsScriptConnectionState;
+  errorMessage: string;
+  onLogout: () => void;
+  user: AuthenticatedUser;
+};
+
 type LoginPageProps = {
   activeStatus: StatusCopy;
   backendRows: BackendRow[];
@@ -100,6 +127,16 @@ type LoginPageProps = {
   errorMessage: string;
   onHealthCheck: () => void;
   onLoginSuccess: (user: AuthenticatedUser) => void;
+};
+
+type FirstLoginPasswordChangeProps = {
+  activeStatus: StatusCopy;
+  connectionState: AppsScriptConnectionState;
+  errorMessage: string;
+  onHealthCheck: () => void;
+  onLogout: () => void;
+  onPasswordChanged: () => void;
+  user: AuthenticatedUser;
 };
 
 type DashboardProps = {
@@ -194,6 +231,32 @@ const dashboardConfigs: Record<DashboardKind, DashboardConfig> = {
   },
 };
 
+const adminConfig = {
+  title: 'Admin Dashboard',
+  eyebrow: 'Administration',
+  landingPath: '/admin.html',
+  menus: [
+    {
+      id: 'audit',
+      label: 'Audit Logs',
+      description: 'All request status',
+      icon: ClipboardCheck,
+    },
+    {
+      id: 'users',
+      label: 'Users',
+      description: 'Manage accounts',
+      icon: UsersRound,
+    },
+    {
+      id: 'settings',
+      label: 'Settings',
+      description: 'Report signature',
+      icon: ShieldCheck,
+    },
+  ] satisfies AdminMenu[],
+};
+
 const requestFields: Array<{
   name: keyof NewLoanRequest;
   label: string;
@@ -215,7 +278,7 @@ const requestFields: Array<{
   { name: 'employers_address', label: "Employer's Address", span: 'full' },
   { name: 'monthly_pension', label: 'Monthly Pension', type: 'number' },
   { name: 'current_nthp', label: 'Current NTHP', type: 'number' },
-  { name: 'analysis_nthp', label: 'Analysis NTHP', type: 'number' },
+  { name: 'analysis_nthp', label: 'Analysis NTHP', type: 'text' },
   { name: 'appraisal_result', label: 'Appraisal Result', span: 'full' },
   { name: 'recommendation', label: 'Recommendation', span: 'full' },
 ];
@@ -297,6 +360,10 @@ function App() {
       return;
     }
 
+    if (currentUser.firstLogin) {
+      return;
+    }
+
     if (pageKind === 'login' || pageKind !== getDashboardForUser(currentUser)) {
       redirectToUserDashboard(currentUser, 'replace');
     }
@@ -309,48 +376,17 @@ function App() {
         'Web App URL',
         hasGoogleAppsScriptUrl ? googleAppsScriptConfig.webAppUrl : 'Not set',
       ],
-      ['Backend App', health?.appName || "Member's Loan Approval"],
-      ['Spreadsheet', health?.spreadsheetName || 'Pending'],
-      [
-        'Users Sheet',
-        health
-          ? health.usersSheetConfigured
-            ? 'Ready'
-            : 'Missing'
-          : 'Pending',
-      ],
-      [
-        'Requests Sheet',
-        health
-          ? health.requestsSheetConfigured
-            ? 'Ready'
-            : 'Missing'
-          : 'Pending',
-      ],
-      [
-        'Other Loans',
-        health
-          ? health.otherLoansSheetConfigured
-            ? 'Ready'
-            : 'Missing'
-          : 'Pending',
-      ],
-      [
-        'Comakers',
-        health
-          ? health.comakersSheetConfigured
-            ? 'Ready'
-            : 'Missing'
-          : 'Pending',
-      ],
     ],
     [health],
   );
 
   const handleLoginSuccess = (user: AuthenticatedUser) => {
     saveStoredUser(user);
-    redirectToUserDashboard(user, 'assign');
     setCurrentUser(user);
+
+    if (!user.firstLogin) {
+      redirectToUserDashboard(user, 'assign');
+    }
   };
 
   const handleLogout = () => {
@@ -375,8 +411,45 @@ function App() {
     );
   }
 
+  if (currentUser.firstLogin) {
+    return (
+      <FirstLoginPasswordChange
+        activeStatus={activeStatus}
+        connectionState={connectionState}
+        errorMessage={errorMessage}
+        onHealthCheck={runHealthCheck}
+        onLogout={handleLogout}
+        onPasswordChanged={() => {
+          const updatedUser = {
+            ...currentUser,
+            firstLogin: false,
+          };
+
+          saveStoredUser(updatedUser);
+          setCurrentUser(updatedUser);
+          redirectToUserDashboard(updatedUser, 'assign');
+        }}
+        user={currentUser}
+      />
+    );
+  }
+
+  const userDashboard = getDashboardForUser(currentUser);
+
+  if (userDashboard === 'admin') {
+    return (
+      <AdminDashboard
+        activeStatus={activeStatus}
+        connectionState={connectionState}
+        errorMessage={errorMessage}
+        onLogout={handleLogout}
+        user={currentUser}
+      />
+    );
+  }
+
   const dashboard =
-    pageKind === 'login' ? getDashboardForUser(currentUser) : pageKind;
+    pageKind === 'login' || pageKind === 'admin' ? userDashboard : pageKind;
 
   return (
     <Dashboard
@@ -424,6 +497,25 @@ function LoginPage({
       setLoginError(getErrorMessage(error));
     } finally {
       setIsSubmitting(false);
+    }
+  };
+
+  const sendPasswordRecoveryEmail = async (userEmail: string) => {
+    setLoginError('');
+
+    try {
+      const result = await sendPasswordRecovery(userEmail);
+
+      if (!result.success) {
+        setLoginError(result.message || 'Password recovery email was not sent.');
+        return;
+      }
+
+      alert(result.message || 'Password recovery email has been sent to ' + userEmail + '. Please check your email.');
+    } catch (error) {
+      const errorMessage = getErrorMessage(error);
+      console.error('Password recovery error:', errorMessage);
+      setLoginError(`Failed to send recovery email: ${errorMessage}`);
     }
   };
 
@@ -517,18 +609,785 @@ function LoginPage({
             <LogIn size={18} aria-hidden="true" />
             {isSubmitting ? 'Signing In' : 'Sign In'}
           </button>
-        </form>
 
-        <dl className="backend-list compact-list">
-          {backendRows.slice(0, 2).map(([label, value]) => (
-            <div key={label}>
-              <dt>{label}</dt>
-              <dd>{value}</dd>
-            </div>
-          ))}
-        </dl>
+          <div className="forgot-password-section">
+            <button
+              className="text-button"
+              type="button"
+              onClick={() => {
+                const userEmail = prompt('Enter your email address to receive password recovery instructions:');
+                if (userEmail) {
+                  sendPasswordRecoveryEmail(userEmail.trim());
+                }
+              }}
+            >
+              Forgot Password?
+            </button>
+          </div>
+        </form>
       </section>
     </main>
+  );
+}
+
+function FirstLoginPasswordChange({
+  activeStatus,
+  connectionState,
+  errorMessage,
+  onHealthCheck,
+  onLogout,
+  onPasswordChanged,
+  user,
+}: FirstLoginPasswordChangeProps) {
+  const [currentPassword, setCurrentPassword] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [formError, setFormError] = useState('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [showPasswords, setShowPasswords] = useState(false);
+
+  const canSubmit =
+    currentPassword.length > 0 &&
+    newPassword.length > 0 &&
+    confirmPassword.length > 0 &&
+    !isSubmitting;
+
+  const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setFormError('');
+
+    if (newPassword.length < 8) {
+      setFormError('New password must be at least 8 characters.');
+      return;
+    }
+
+    if (newPassword !== confirmPassword) {
+      setFormError('New password and confirmation do not match.');
+      return;
+    }
+
+    if (newPassword === currentPassword) {
+      setFormError('New password must be different from the current password.');
+      return;
+    }
+
+    setIsSubmitting(true);
+
+    try {
+      const result = await changePassword({
+        email: user.email,
+        currentPassword,
+        newPassword,
+      });
+
+      if (!result.success) {
+        setFormError(result.message || 'Password was not changed.');
+        return;
+      }
+
+      alert(result.message || 'Password changed successfully.');
+      onPasswordChanged();
+    } catch (error) {
+      setFormError(getErrorMessage(error));
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  return (
+    <main className="login-shell security-shell">
+      <section className="login-intro" aria-labelledby="security-app-title">
+        <div className="brand-mark">
+          <ShieldCheck size={30} aria-hidden="true" />
+        </div>
+        <p className="eyebrow">Barbaza MPC</p>
+        <h1 id="security-app-title">Change Password</h1>
+        <p className="login-copy">
+          Your account needs a new password before opening the dashboard.
+        </p>
+
+        <ConnectionNotice
+          activeStatus={activeStatus}
+          connectionState={connectionState}
+          compact
+        />
+
+        {errorMessage ? <p className="error-text">{errorMessage}</p> : null}
+
+        <div className="security-actions">
+          <button
+            className="secondary-button inline-button"
+            type="button"
+            onClick={onHealthCheck}
+            disabled={connectionState === 'checking'}
+          >
+            <RefreshCw size={17} aria-hidden="true" />
+            Test Connection
+          </button>
+          <button
+            className="secondary-button inline-button"
+            type="button"
+            onClick={onLogout}
+          >
+            <LogOut size={17} aria-hidden="true" />
+            Sign Out
+          </button>
+        </div>
+      </section>
+
+      <section className="login-panel" aria-labelledby="security-title">
+        <div className="panel-heading">
+          <div>
+            <p className="eyebrow">{user.email}</p>
+            <h2 id="security-title">First Login Security</h2>
+          </div>
+          <LockKeyhole size={24} aria-hidden="true" />
+        </div>
+
+        <form className="login-form" onSubmit={handleSubmit}>
+          <label htmlFor="current-password">Current Password</label>
+          <div className="input-shell">
+            <LockKeyhole size={18} aria-hidden="true" />
+            <input
+              autoComplete="current-password"
+              id="current-password"
+              name="current-password"
+              onChange={(event) => setCurrentPassword(event.target.value)}
+              placeholder="Enter current password"
+              type={showPasswords ? 'text' : 'password'}
+              value={currentPassword}
+            />
+          </div>
+
+          <label htmlFor="new-password">New Password</label>
+          <div className="input-shell">
+            <LockKeyhole size={18} aria-hidden="true" />
+            <input
+              autoComplete="new-password"
+              id="new-password"
+              name="new-password"
+              onChange={(event) => setNewPassword(event.target.value)}
+              placeholder="At least 8 characters"
+              type={showPasswords ? 'text' : 'password'}
+              value={newPassword}
+            />
+          </div>
+
+          <label htmlFor="confirm-password">Confirm New Password</label>
+          <div className="input-shell">
+            <LockKeyhole size={18} aria-hidden="true" />
+            <input
+              autoComplete="new-password"
+              id="confirm-password"
+              name="confirm-password"
+              onChange={(event) => setConfirmPassword(event.target.value)}
+              placeholder="Re-enter new password"
+              type={showPasswords ? 'text' : 'password'}
+              value={confirmPassword}
+            />
+            <button
+              className="icon-button"
+              type="button"
+              onClick={() => setShowPasswords((value) => !value)}
+              aria-label={showPasswords ? 'Hide passwords' : 'Show passwords'}
+            >
+              {showPasswords ? (
+                <EyeOff size={18} aria-hidden="true" />
+              ) : (
+                <Eye size={18} aria-hidden="true" />
+              )}
+            </button>
+          </div>
+
+          {formError ? <p className="error-text">{formError}</p> : null}
+
+          <button className="primary-button" type="submit" disabled={!canSubmit}>
+            <Save size={18} aria-hidden="true" />
+            {isSubmitting ? 'Saving Password' : 'Change Password'}
+          </button>
+        </form>
+      </section>
+    </main>
+  );
+}
+
+function AdminDashboard({
+  activeStatus,
+  connectionState,
+  errorMessage,
+  onLogout,
+  user,
+}: AdminDashboardProps) {
+  const [activeView, setActiveView] = useState<AdminView>('audit');
+  const activeMenu =
+    adminConfig.menus.find((menu) => menu.id === activeView) ||
+    adminConfig.menus[0];
+
+  return (
+    <div className="dashboard-shell">
+      <aside className="dashboard-sidebar">
+        <div className="sidebar-brand">
+          <div className="brand-mark sidebar-mark">
+            <ShieldCheck size={24} aria-hidden="true" />
+          </div>
+          <div>
+            <p className="eyebrow">Member&apos;s Loan</p>
+            <strong>Admin</strong>
+          </div>
+        </div>
+
+        <nav className="sidebar-nav" aria-label="Admin dashboard menu">
+          {adminConfig.menus.map((menu) => {
+            const Icon = menu.icon;
+            const isActive = menu.id === activeView;
+
+            return (
+              <button
+                className={`sidebar-link ${isActive ? 'active' : ''}`}
+                key={menu.id}
+                type="button"
+                onClick={() => setActiveView(menu.id)}
+              >
+                <Icon size={19} aria-hidden="true" />
+                <span>
+                  <strong>{menu.label}</strong>
+                  <small>{menu.description}</small>
+                </span>
+              </button>
+            );
+          })}
+        </nav>
+
+        <div className="sidebar-footer">
+          <div className="sidebar-user-info">
+            <strong>{user.fullname || user.email}</strong>
+            <small>{user.position || user.role || 'Admin'}</small>
+          </div>
+        </div>
+      </aside>
+
+      <main className="dashboard-main">
+        <header className="dashboard-header">
+          <div>
+            <p className="eyebrow">{adminConfig.eyebrow}</p>
+            <h1>{adminConfig.title}</h1>
+          </div>
+          <div className="topbar-actions">
+            <div className={`status-pill ${connectionState}`}>
+              <span />
+              {activeStatus.label}
+            </div>
+            <button className="icon-action" type="button" onClick={onLogout}>
+              <LogOut size={18} aria-hidden="true" />
+              Sign Out
+            </button>
+          </div>
+        </header>
+
+        {errorMessage ? (
+          <p className="error-text dashboard-notice">{errorMessage}</p>
+        ) : null}
+
+        <section className="requests-panel" aria-labelledby="admin-title">
+          <div className="panel-heading">
+            <div>
+              <p className="eyebrow">{activeMenu.description}</p>
+              <h2 id="admin-title">{activeMenu.label}</h2>
+            </div>
+          </div>
+
+          {activeView === 'audit' ? <AdminAuditLogs /> : null}
+          {activeView === 'users' ? <AdminUsers /> : null}
+          {activeView === 'settings' ? <AdminSettings /> : null}
+        </section>
+      </main>
+    </div>
+  );
+}
+
+function AdminAuditLogs() {
+  const [requests, setRequests] = useState<LoanRequest[]>([]);
+  const [isLoading, setIsLoading] = useState(false);
+  const [errorMessage, setErrorMessage] = useState('');
+  const [sheetConfigured, setSheetConfigured] = useState(true);
+
+  useEffect(() => {
+    let isCurrent = true;
+
+    const loadLogs = async () => {
+      setErrorMessage('');
+      setIsLoading(true);
+
+      try {
+        const result = await listAuditLogs();
+
+        if (!isCurrent) {
+          return;
+        }
+
+        setRequests(result.requests);
+        setSheetConfigured(result.sheetConfigured);
+      } catch (error) {
+        if (isCurrent) {
+          setRequests([]);
+          setErrorMessage(getErrorMessage(error));
+        }
+      } finally {
+        if (isCurrent) {
+          setIsLoading(false);
+        }
+      }
+    };
+
+    void loadLogs();
+
+    return () => {
+      isCurrent = false;
+    };
+  }, []);
+
+  if (errorMessage) {
+    return <p className="error-text">{errorMessage}</p>;
+  }
+
+  return (
+    <div className="admin-table" role="table" aria-label="Audit logs">
+      <div className="admin-row admin-head" role="row">
+        <span role="columnheader">Request ID</span>
+        <span role="columnheader">Member</span>
+        <span role="columnheader">Branch</span>
+        <span role="columnheader">Requested By</span>
+        <span role="columnheader">Status</span>
+        <span role="columnheader">Requested</span>
+      </div>
+
+      {requests.length ? (
+        requests.map((request) => (
+          <div className="admin-row" role="row" key={getRequestKey(request)}>
+            <span>{request.requestId || '-'}</span>
+            <strong>{request.memberName || '-'}</strong>
+            <span>{formatBranchLabel(request.branchName, request.branchid)}</span>
+            <span>{request.requestedByName || request.requestedBy || '-'}</span>
+            <span>
+              <StatusBadge status={request.status} />
+            </span>
+            <span>{request.requestedAt || '-'}</span>
+          </div>
+        ))
+      ) : (
+        <div className="admin-empty" role="row">
+          <span>
+            {isLoading
+              ? 'Loading audit logs.'
+              : sheetConfigured
+                ? 'No audit records found.'
+                : 'LoanRequest sheet not found.'}
+          </span>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function AdminUsers() {
+  const [users, setUsers] = useState<AdminUser[]>([]);
+  const [editingUser, setEditingUser] = useState<AdminUser | null>(null);
+  const [isAdding, setIsAdding] = useState(false);
+  const [isLoading, setIsLoading] = useState(false);
+  const [errorMessage, setErrorMessage] = useState('');
+  const [successMessage, setSuccessMessage] = useState('');
+  const [refreshToken, setRefreshToken] = useState(0);
+
+  useEffect(() => {
+    let isCurrent = true;
+
+    const loadUsers = async () => {
+      setErrorMessage('');
+      setIsLoading(true);
+
+      try {
+        const result = await listUsers();
+
+        if (!isCurrent) {
+          return;
+        }
+
+        setUsers(result.users);
+      } catch (error) {
+        if (isCurrent) {
+          setUsers([]);
+          setErrorMessage(getErrorMessage(error));
+        }
+      } finally {
+        if (isCurrent) {
+          setIsLoading(false);
+        }
+      }
+    };
+
+    void loadUsers();
+
+    return () => {
+      isCurrent = false;
+    };
+  }, [refreshToken]);
+
+  const handleSaved = (message?: string) => {
+    setIsAdding(false);
+    setEditingUser(null);
+    setSuccessMessage(message || 'User saved.');
+    setRefreshToken((value) => value + 1);
+  };
+
+  return (
+    <div className="admin-stack">
+      <div className="panel-actions">
+        <button
+          className="secondary-button inline-button"
+          type="button"
+          onClick={() => {
+            setEditingUser(null);
+            setIsAdding((value) => !value);
+            setSuccessMessage('');
+          }}
+        >
+          {isAdding ? <X size={17} aria-hidden="true" /> : <Plus size={17} aria-hidden="true" />}
+          {isAdding ? 'Close' : 'Add User'}
+        </button>
+        <span className="count-chip">{isLoading ? 'Loading' : `${users.length} users`}</span>
+      </div>
+
+      {errorMessage ? <p className="error-text">{errorMessage}</p> : null}
+      {successMessage ? <p className="notice-text">{successMessage}</p> : null}
+
+      {(isAdding || editingUser) ? (
+        <AdminUserForm
+          key={editingUser?.email || 'new-user'}
+          user={editingUser}
+          onCancel={() => {
+            setIsAdding(false);
+            setEditingUser(null);
+          }}
+          onSaved={handleSaved}
+        />
+      ) : null}
+
+      <div className="admin-table admin-users-table" role="table" aria-label="Users">
+        <div className="admin-row admin-head" role="row">
+          <span role="columnheader">Email</span>
+          <span role="columnheader">Name</span>
+          <span role="columnheader">Role</span>
+          <span role="columnheader">Branch</span>
+          <span role="columnheader">First Login</span>
+          <span role="columnheader">Action</span>
+        </div>
+
+        {users.length ? (
+          users.map((adminUser) => (
+            <div className="admin-row" role="row" key={adminUser.email}>
+              <span>{adminUser.email}</span>
+              <strong>{adminUser.fullname || '-'}</strong>
+              <span>{adminUser.role || '-'}</span>
+              <span>{formatBranchLabel(adminUser.branchName, adminUser.branchid)}</span>
+              <span>{adminUser.firstLogin ? 'Yes' : 'No'}</span>
+              <span>
+                <button
+                  className="icon-action"
+                  type="button"
+                  onClick={() => {
+                    setIsAdding(false);
+                    setEditingUser(adminUser);
+                    setSuccessMessage('');
+                  }}
+                >
+                  <Edit size={16} aria-hidden="true" />
+                  Edit
+                </button>
+              </span>
+            </div>
+          ))
+        ) : (
+          <div className="admin-empty" role="row">
+            <span>{isLoading ? 'Loading users.' : 'No users found.'}</span>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function AdminUserForm({
+  user,
+  onCancel,
+  onSaved,
+}: {
+  user: AdminUser | null;
+  onCancel: () => void;
+  onSaved: (message?: string) => void;
+}) {
+  const isNew = !user;
+  const [form, setForm] = useState<AdminUserInput>({
+    email: user?.email || '',
+    password: '',
+    role: user?.role || 'teller',
+    fullname: user?.fullname || '',
+    position: user?.position || '',
+    branchid: user?.branchid || '',
+    firstLogin: user?.firstLogin ?? true,
+    isNew,
+  });
+  const [formError, setFormError] = useState('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  const updateField = (field: keyof AdminUserInput, value: string | boolean) => {
+    setForm((current) => ({
+      ...current,
+      [field]: value,
+    }));
+  };
+
+  const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setFormError('');
+    setIsSubmitting(true);
+
+    try {
+      const result = await saveUser({
+        ...form,
+        isNew,
+      });
+
+      if (!result.success) {
+        setFormError(result.message || 'User was not saved.');
+        return;
+      }
+
+      onSaved(result.message);
+    } catch (error) {
+      setFormError(getErrorMessage(error));
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  return (
+    <form className="request-form admin-user-form" onSubmit={handleSubmit}>
+      <div className="form-grid compact">
+        <label className="field-control">
+          <span>Email</span>
+          <input
+            type="email"
+            value={form.email}
+            onChange={(event) => updateField('email', event.target.value)}
+            readOnly={!isNew}
+            required
+          />
+        </label>
+        <label className="field-control">
+          <span>{isNew ? 'Password' : 'New Password'}</span>
+          <input
+            type="text"
+            value={form.password || ''}
+            onChange={(event) => updateField('password', event.target.value)}
+            placeholder={isNew ? 'Default password' : 'Leave blank to keep current'}
+            required={isNew}
+          />
+        </label>
+        <label className="field-control">
+          <span>Role</span>
+          <select
+            value={form.role}
+            onChange={(event) => updateField('role', event.target.value)}
+          >
+            <option value="admin">admin</option>
+            <option value="teller">teller</option>
+            <option value="branch_manager">branch_manager</option>
+            <option value="approver">approver</option>
+          </select>
+        </label>
+        <label className="field-control">
+          <span>Branch ID</span>
+          <input
+            value={form.branchid}
+            onChange={(event) => updateField('branchid', event.target.value)}
+          />
+        </label>
+        <label className="field-control">
+          <span>Full Name</span>
+          <input
+            value={form.fullname}
+            onChange={(event) => updateField('fullname', event.target.value)}
+            required
+          />
+        </label>
+        <label className="field-control">
+          <span>Position</span>
+          <input
+            value={form.position}
+            onChange={(event) => updateField('position', event.target.value)}
+          />
+        </label>
+        <label className="field-control checkbox-control">
+          <span>First Login</span>
+          <input
+            type="checkbox"
+            checked={form.firstLogin}
+            onChange={(event) => updateField('firstLogin', event.target.checked)}
+          />
+        </label>
+      </div>
+
+      {formError ? <p className="error-text">{formError}</p> : null}
+
+      <div className="form-actions">
+        <button className="secondary-button" type="button" onClick={onCancel}>
+          <X size={17} aria-hidden="true" />
+          Cancel
+        </button>
+        <button className="primary-button inline-primary" type="submit" disabled={isSubmitting}>
+          <Save size={17} aria-hidden="true" />
+          {isSubmitting ? 'Saving' : isNew ? 'Add User' : 'Save User'}
+        </button>
+      </div>
+    </form>
+  );
+}
+
+function AdminSettings() {
+  const [settings, setSettings] = useState<AppSettings>({});
+  const [draftSignature, setDraftSignature] = useState('');
+  const [isLoading, setIsLoading] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+  const [message, setMessage] = useState('');
+  const [errorMessage, setErrorMessage] = useState('');
+
+  useEffect(() => {
+    let isCurrent = true;
+
+    const loadSettings = async () => {
+      setIsLoading(true);
+      setErrorMessage('');
+
+      try {
+        const result = await getSettings();
+
+        if (!isCurrent) {
+          return;
+        }
+
+        setSettings(result);
+        setDraftSignature(result.approverSignature || '');
+      } catch (error) {
+        if (isCurrent) {
+          setErrorMessage(getErrorMessage(error));
+        }
+      } finally {
+        if (isCurrent) {
+          setIsLoading(false);
+        }
+      }
+    };
+
+    void loadSettings();
+
+    return () => {
+      isCurrent = false;
+    };
+  }, []);
+
+  const handleFileChange = async (file: File | undefined) => {
+    setErrorMessage('');
+    setMessage('');
+
+    if (!file) {
+      return;
+    }
+
+    try {
+      const dataUrl = await fileToSignatureDataUrl(file);
+      setDraftSignature(dataUrl);
+    } catch (error) {
+      setErrorMessage(getErrorMessage(error));
+    }
+  };
+
+  const handleSave = async () => {
+    setIsSaving(true);
+    setErrorMessage('');
+    setMessage('');
+
+    try {
+      const result = await updateSettings({
+        approverSignature: draftSignature,
+      });
+
+      if (!result.success) {
+        setErrorMessage(result.message || 'Settings were not saved.');
+        return;
+      }
+
+      setSettings({
+        approverSignature: result.approverSignature || draftSignature,
+      });
+      setMessage(result.message || 'Settings saved.');
+    } catch (error) {
+      setErrorMessage(getErrorMessage(error));
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  return (
+    <div className="admin-stack">
+      {isLoading ? <p className="notice-text">Loading settings.</p> : null}
+      {errorMessage ? <p className="error-text">{errorMessage}</p> : null}
+      {message ? <p className="notice-text">{message}</p> : null}
+
+      <div className="settings-panel">
+        <label className="field-control">
+          <span>Approver Signature</span>
+          <input
+            type="file"
+            accept="image/*"
+            onChange={(event) => void handleFileChange(event.target.files?.[0])}
+          />
+        </label>
+
+        <div className="signature-preview">
+          {draftSignature ? (
+            <img src={draftSignature} alt="Approver signature preview" />
+          ) : (
+            <span>No signature uploaded.</span>
+          )}
+        </div>
+
+        <div className="form-actions">
+          <button
+            className="secondary-button"
+            type="button"
+            onClick={() => setDraftSignature(settings.approverSignature || '')}
+          >
+            Reset
+          </button>
+          <button
+            className="secondary-button"
+            type="button"
+            onClick={() => setDraftSignature('')}
+          >
+            Clear Signature
+          </button>
+          <button
+            className="primary-button inline-primary"
+            type="button"
+            onClick={handleSave}
+            disabled={isSaving}
+          >
+            <Save size={17} aria-hidden="true" />
+            {isSaving ? 'Saving' : 'Save Settings'}
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -777,20 +1636,10 @@ function Dashboard({
         </nav>
 
         <div className="sidebar-footer">
-          <ConnectionNotice
-            activeStatus={activeStatus}
-            connectionState={connectionState}
-            compact
-          />
-          <button
-            className="secondary-button"
-            type="button"
-            onClick={onHealthCheck}
-            disabled={connectionState === 'checking'}
-          >
-            <RefreshCw size={17} aria-hidden="true" />
-            Test Connection
-          </button>
+          <div className="sidebar-user-info">
+            <strong>{user.fullname || user.email}</strong>
+            <small>{formatUserProfileLine(user)}</small>
+          </div>
         </div>
       </aside>
 
@@ -801,10 +1650,6 @@ function Dashboard({
             <h1>{config.title}</h1>
           </div>
           <div className="topbar-actions">
-            <div className="profile-chip">
-              <span>{user.fullname || user.email}</span>
-              <small>{user.role || user.position || 'User'}</small>
-            </div>
             <div className={`status-pill ${connectionState}`}>
               <span />
               {activeStatus.label}
@@ -1607,6 +2452,7 @@ function RequestTable({
         <span role="columnheader">Member</span>
         <span role="columnheader">Loan Type</span>
         <span role="columnheader">Amount</span>
+        <span role="columnheader">Branch</span>
         <span role="columnheader">Status</span>
         <span role="columnheader">Requested</span>
         <span role="columnheader">Action</span>
@@ -1619,6 +2465,9 @@ function RequestTable({
             <strong>{request.memberName || '-'}</strong>
             <span>{request.loanType || '-'}</span>
             <span>{request.amount || '-'}</span>
+            <span title={formatBranchLabel(request.branchName, request.branchid)}>
+              {formatBranchLabel(request.branchName, request.branchid)}
+            </span>
             <span>
               <StatusBadge status={request.status} />
             </span>
@@ -1697,6 +2546,7 @@ function RequestDetailPanel({
   const [dateOfApproval, setDateOfApproval] = useState(request.dateOfApproval || '');
   const [loanAmountApproved, setLoanAmountApproved] = useState(request.loanAmountApproved || '');
   const [additionalRequirements, setAdditionalRequirements] = useState(request.additionalRequirements || '');
+  const [appSettings, setAppSettings] = useState<AppSettings>({});
 
   useEffect(() => {
     let isCurrent = true;
@@ -1710,6 +2560,7 @@ function RequestDetailPanel({
       setDateOfApproval(request.dateOfApproval || '');
       setLoanAmountApproved(request.loanAmountApproved || '');
       setAdditionalRequirements(request.additionalRequirements || '');
+      setAppSettings({});
 
       if (!request.requestId) {
         setDetailsError('Unable to load full request details: request ID is missing.');
@@ -1719,9 +2570,12 @@ function RequestDetailPanel({
       setIsLoadingDetails(true);
 
       try {
-        const result = await getLoanRequestDetails({
-          requestId: request.requestId,
-        });
+        const [result, settings] = await Promise.all([
+          getLoanRequestDetails({
+            requestId: request.requestId,
+          }),
+          getSettings().catch(() => ({})),
+        ]);
 
         if (!isCurrent) {
           return;
@@ -1734,6 +2588,7 @@ function RequestDetailPanel({
         setDateOfApproval(result.dateOfApproval || request.dateOfApproval || '');
         setLoanAmountApproved(result.loanAmountApproved || request.loanAmountApproved || '');
         setAdditionalRequirements(result.additionalRequirements || request.additionalRequirements || '');
+        setAppSettings(settings);
       } catch (error) {
         if (!isCurrent) {
           return;
@@ -1814,7 +2669,13 @@ function RequestDetailPanel({
                     details?.requestedBy ||
                     request.requestedBy,
                 ],
-                ['Branch', details?.branchid || request.branchid],
+                [
+                  'Branch',
+                  formatBranchLabel(
+                    details?.branchName || request.branchName,
+                    details?.branchid || request.branchid,
+                  ),
+                ],
                 ['Request Date', requestDetails?.request_date || request.requestedAt],
               ]}
             />
@@ -1907,6 +2768,7 @@ function RequestDetailPanel({
                 dateOfApproval={dateOfApproval}
                 details={details}
                 loanAmountApproved={loanAmountApproved}
+                approverSignature={appSettings.approverSignature}
                 request={request}
                 requestDetails={requestDetails}
                 reviewAndRecommendations={reviewAndRecommendations}
@@ -2155,6 +3017,7 @@ function DetailSection({
 
 type ProcessingSheetPrintTemplateProps = {
   additionalRequirements: string;
+  approverSignature?: string;
   dateOfApproval: string;
   details: LoanRequestDetails | null;
   loanAmountApproved: string;
@@ -2170,6 +3033,7 @@ type ProcessingTableColumn<T> = {
 
 function ProcessingSheetPrintTemplate({
   additionalRequirements,
+  approverSignature,
   dateOfApproval,
   details,
   loanAmountApproved,
@@ -2388,6 +3252,13 @@ function ProcessingSheetPrintTemplate({
         <div className="processing-authority">
           <span>Approving Authority:</span>
           <div>
+            {approverSignature ? (
+              <img
+                className="processing-approver-signature"
+                src={approverSignature}
+                alt=""
+              />
+            ) : null}
             <strong>ERWIN A. BANA, CPA</strong>
             <p>Savings and Credit Head</p>
           </div>
@@ -2710,7 +3581,7 @@ function getSummaryCards({
     {
       icon: UsersRound,
       label: 'Branch',
-      value: user.branchid || '-',
+      value: formatBranchLabel(user.branchName, user.branchid),
     },
     {
       icon: LayoutDashboard,
@@ -2740,11 +3611,19 @@ function getCurrentPageKind(): PageKind {
     return 'approver';
   }
 
+  if (pathname.endsWith('/admin.html')) {
+    return 'admin';
+  }
+
   return 'login';
 }
 
-function getDashboardForUser(user: AuthenticatedUser): DashboardKind {
+function getDashboardForUser(user: AuthenticatedUser): UserDashboardKind {
   const role = user.role.trim().toLowerCase();
+
+  if (role === 'admin') {
+    return 'admin';
+  }
 
   if (role === 'teller') {
     return 'teller';
@@ -2759,6 +3638,10 @@ function getDashboardForUser(user: AuthenticatedUser): DashboardKind {
   }
 
   const profile = normalizeRole(`${user.role} ${user.position}`);
+
+  if (profile.includes('admin')) {
+    return 'admin';
+  }
 
   if (profile.includes('branchmanager') || profile.includes('manager')) {
     return 'manager';
@@ -2780,7 +3663,10 @@ function redirectToUserDashboard(
   mode: 'assign' | 'replace',
 ) {
   const dashboard = getDashboardForUser(user);
-  const nextPath = dashboardConfigs[dashboard].landingPath;
+  const nextPath =
+    dashboard === 'admin'
+      ? adminConfig.landingPath
+      : dashboardConfigs[dashboard].landingPath;
 
   if (window.location.pathname.toLowerCase().endsWith(nextPath)) {
     return;
@@ -2810,6 +3696,70 @@ function getRequestKey(request: LoanRequest) {
 
 function titleCase(value: string) {
   return value.charAt(0).toUpperCase() + value.slice(1);
+}
+
+function formatBranchLabel(branchName?: string, branchid?: string) {
+  const name = String(branchName || '').trim();
+  const id = String(branchid || '').trim();
+
+  return name || id || '-';
+}
+
+function formatUserProfileLine(user: AuthenticatedUser) {
+  const profile = user.position || user.role || 'User';
+  const branch = formatBranchLabel(user.branchName, user.branchid);
+
+  return branch === '-' ? profile : `${profile} | ${branch}`;
+}
+
+function fileToSignatureDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    if (!file.type.startsWith('image/')) {
+      reject(new Error('Please choose an image file.'));
+      return;
+    }
+
+    const reader = new FileReader();
+
+    reader.onerror = () => reject(new Error('Unable to read signature file.'));
+    reader.onload = () => {
+      const image = new Image();
+
+      image.onerror = () => reject(new Error('Unable to load signature image.'));
+      image.onload = () => {
+        const maxWidth = 640;
+        const maxHeight = 220;
+        const scale = Math.min(1, maxWidth / image.width, maxHeight / image.height);
+        const width = Math.max(1, Math.round(image.width * scale));
+        const height = Math.max(1, Math.round(image.height * scale));
+        const canvas = document.createElement('canvas');
+        const context = canvas.getContext('2d');
+
+        if (!context) {
+          reject(new Error('Unable to process signature image.'));
+          return;
+        }
+
+        canvas.width = width;
+        canvas.height = height;
+        context.clearRect(0, 0, width, height);
+        context.drawImage(image, 0, 0, width, height);
+
+        const dataUrl = canvas.toDataURL('image/png');
+
+        if (dataUrl.length > 45000) {
+          reject(new Error('Signature image is too large. Please choose a smaller image.'));
+          return;
+        }
+
+        resolve(dataUrl);
+      };
+
+      image.src = String(reader.result || '');
+    };
+
+    reader.readAsDataURL(file);
+  });
 }
 
 function createEmptyLoanRequest(): NewLoanRequest {

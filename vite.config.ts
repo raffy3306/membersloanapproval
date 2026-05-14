@@ -11,6 +11,7 @@ export default defineConfig({
         teller: fileURLToPath(new URL('./teller.html', import.meta.url)),
         manager: fileURLToPath(new URL('./manager.html', import.meta.url)),
         approver: fileURLToPath(new URL('./approver.html', import.meta.url)),
+        admin: fileURLToPath(new URL('./admin.html', import.meta.url)),
       },
     },
   },

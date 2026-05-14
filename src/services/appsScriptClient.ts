@@ -23,6 +23,8 @@ export type BackendHealth = {
   otherLoansSheetConfigured?: boolean;
   comakersSheetConfigured?: boolean;
   securitiesSheetConfigured?: boolean;
+  branchesSheetConfigured?: boolean;
+  settingsSheetConfigured?: boolean;
 };
 
 export type AuthenticatedUser = {
@@ -31,12 +33,29 @@ export type AuthenticatedUser = {
   fullname: string;
   position: string;
   branchid: string;
+  branchName?: string;
   firstLogin: boolean;
 };
 
 export type LoginCredentials = {
   email: string;
   password: string;
+};
+
+export type PasswordRecoveryResponse = {
+  success: boolean;
+  message?: string;
+};
+
+export type ChangePasswordPayload = {
+  email: string;
+  currentPassword: string;
+  newPassword: string;
+};
+
+export type ChangePasswordResponse = {
+  success: boolean;
+  message?: string;
 };
 
 export type LoanRequestStatus =
@@ -60,6 +79,7 @@ export type LoanRequest = {
   requestedBy: string;
   requestedByName: string;
   branchid: string;
+  branchName?: string;
   remarks: string;
   managerNotes: string;
   approverNotes: string;
@@ -77,10 +97,51 @@ export type LoanRequestListResponse = {
 };
 
 export type LoanRequestListPayload = {
-  dashboard: 'teller' | 'manager' | 'approver';
+  dashboard: 'teller' | 'manager' | 'approver' | 'admin';
   view: 'pending' | 'history';
   email: string;
   branchid: string;
+};
+
+export type AdminUser = {
+  email: string;
+  role: string;
+  fullname: string;
+  position: string;
+  branchid: string;
+  branchName?: string;
+  firstLogin: boolean;
+};
+
+export type AdminUserInput = {
+  email: string;
+  password?: string;
+  role: string;
+  fullname: string;
+  position: string;
+  branchid: string;
+  firstLogin: boolean;
+  isNew?: boolean;
+};
+
+export type ListUsersResponse = {
+  users: AdminUser[];
+  sheetConfigured: boolean;
+};
+
+export type SaveUserResponse = {
+  success: boolean;
+  message?: string;
+};
+
+export type AppSettings = {
+  approverSignature?: string;
+};
+
+export type UpdateSettingsResponse = {
+  success: boolean;
+  message?: string;
+  approverSignature?: string;
 };
 
 export type NewLoanRequest = {
@@ -141,6 +202,7 @@ export type LoanRequestDetails = {
   requestedBy: string;
   requestedByName: string;
   branchid: string;
+  branchName?: string;
   managerNotes: string;
   approverNotes: string;
   managerBy: string;
@@ -371,6 +433,12 @@ export const checkBackendHealth = () => callAppsScript<BackendHealth>('health');
 export const loginUser = (credentials: LoginCredentials) =>
   callAppsScript<AuthenticatedUser>('login', credentials);
 
+export const sendPasswordRecovery = (email: string) =>
+  callAppsScript<PasswordRecoveryResponse>('sendPasswordRecovery', { email });
+
+export const changePassword = (payload: ChangePasswordPayload) =>
+  callAppsScript<ChangePasswordResponse>('changePassword', payload);
+
 export const listLoanRequests = (payload: LoanRequestListPayload) =>
   callAppsScript<LoanRequestListResponse>('listRequests', payload);
 
@@ -406,3 +474,18 @@ export const disapproveLoanRequest = (payload: DecideLoanRequestPayload) =>
 
 export const returnLoanRequestToManager = (payload: ReturnToManagerPayload) =>
   callAppsScript<ReturnToManagerResponse>('returnToManager', payload);
+
+export const listAuditLogs = () =>
+  callAppsScript<LoanRequestListResponse>('listAuditLogs', {});
+
+export const listUsers = () =>
+  callAppsScript<ListUsersResponse>('listUsers', {});
+
+export const saveUser = (user: AdminUserInput) =>
+  callAppsScript<SaveUserResponse>('saveUser', { user });
+
+export const getSettings = () =>
+  callAppsScript<AppSettings>('getSettings', {});
+
+export const updateSettings = (settings: AppSettings) =>
+  callAppsScript<UpdateSettingsResponse>('updateSettings', { settings });

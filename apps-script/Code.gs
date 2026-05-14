@@ -7,6 +7,21 @@ const REQUESTS_SHEET_NAME = 'LoanRequest';
 const OTHER_LOANS_SHEET_NAME = 'OtherLoans';
 const COMAKERS_SHEET_NAME = 'Comakers';
 const SECURITIES_SHEET_NAME = 'Securities';
+const BRANCHES_SHEET_NAME = 'Branch';
+const SETTINGS_SHEET_NAME = 'Settings';
+const USER_HEADERS = [
+  'email',
+  'password',
+  'role',
+  'fullname',
+  'position',
+  'branchid',
+  'FirstLogin',
+];
+const SETTINGS_HEADERS = [
+  'key',
+  'value',
+];
 const REQUEST_HEADERS = [
   'request_id',
   'request_date',
@@ -78,6 +93,16 @@ function doPost(event) {
   return route_(event, 'POST');
 }
 
+function authorizeRequiredServices() {
+  const spreadsheet = getSpreadsheet_();
+
+  return {
+    appName: APP_NAME,
+    spreadsheetName: spreadsheet ? spreadsheet.getName() : '',
+    remainingMailQuota: MailApp.getRemainingDailyQuota(),
+  };
+}
+
 function route_(event, method) {
   try {
     const body = parseBody_(event);
@@ -96,6 +121,16 @@ function route_(event, method) {
         return json_({
           ok: true,
           data: loginUser_(body.payload || {}),
+        });
+      case 'sendPasswordRecovery':
+        return json_({
+          ok: true,
+          data: sendPasswordRecovery_(body.payload || {}),
+        });
+      case 'changePassword':
+        return json_({
+          ok: true,
+          data: changePassword_(body.payload || {}),
         });
       case 'listRequests':
         return json_({
@@ -157,6 +192,31 @@ function route_(event, method) {
           ok: true,
           data: getComakerLoans_(body.payload || {}),
         });
+      case 'listAuditLogs':
+        return json_({
+          ok: true,
+          data: listAuditLogs_(body.payload || {}),
+        });
+      case 'listUsers':
+        return json_({
+          ok: true,
+          data: listUsers_(body.payload || {}),
+        });
+      case 'saveUser':
+        return json_({
+          ok: true,
+          data: saveUser_(body.payload || {}),
+        });
+      case 'getSettings':
+        return json_({
+          ok: true,
+          data: getSettings_(body.payload || {}),
+        });
+      case 'updateSettings':
+        return json_({
+          ok: true,
+          data: updateSettings_(body.payload || {}),
+        });
       default:
         return json_({
           ok: false,
@@ -192,6 +252,8 @@ function getHealth_() {
   const otherLoansSheet = spreadsheet ? spreadsheet.getSheetByName(OTHER_LOANS_SHEET_NAME) : null;
   const comakersSheet = spreadsheet ? spreadsheet.getSheetByName(COMAKERS_SHEET_NAME) : null;
   const securitiesSheet = spreadsheet ? spreadsheet.getSheetByName(SECURITIES_SHEET_NAME) : null;
+  const branchesSheet = spreadsheet ? getBranchesSheet_(spreadsheet) : null;
+  const settingsSheet = spreadsheet ? spreadsheet.getSheetByName(SETTINGS_SHEET_NAME) : null;
 
   return {
     appName: APP_NAME,
@@ -207,6 +269,8 @@ function getHealth_() {
     otherLoansSheetConfigured: Boolean(otherLoansSheet),
     comakersSheetConfigured: Boolean(comakersSheet),
     securitiesSheetConfigured: Boolean(securitiesSheet),
+    branchesSheetConfigured: Boolean(branchesSheet),
+    settingsSheetConfigured: Boolean(settingsSheet),
   };
 }
 
@@ -237,6 +301,7 @@ function loginUser_(payload) {
   }
 
   const headers = getHeaderMap_(rows[0]);
+  const branchNamesById = getBranchNamesById_(spreadsheet);
   requireColumns_(headers, [
     'email',
     'password',
@@ -252,19 +317,400 @@ function loginUser_(payload) {
     const rowEmail = normalizeEmail_(row[headers.email]);
     const rowPassword = cellValue_(row, headers.password);
 
-    if (rowEmail === email && rowPassword === password) {
+    if (rowEmail === email && verifyPassword_(password, rowPassword)) {
+      const branchid = cellValue_(row, headers.branchid);
+
       return {
         email: cellValue_(row, headers.email),
         role: cellValue_(row, headers.role),
         fullname: cellValue_(row, headers.fullname),
         position: cellValue_(row, headers.position),
-        branchid: cellValue_(row, headers.branchid),
+        branchid: branchid,
+        branchName: getBranchName_(branchNamesById, branchid),
         firstLogin: parseBoolean_(cellValue_(row, headers.firstlogin)),
       };
     }
   }
 
   throw new Error('Invalid email or password.');
+}
+
+function hashPassword_(password) {
+  const digest = Utilities.computeDigest(
+    Utilities.DigestAlgorithm.SHA_256,
+    password,
+  );
+  return Utilities.base64Encode(digest);
+}
+
+function verifyPassword_(password, hashedPassword) {
+  const computedHash = hashPassword_(password);
+  return computedHash === hashedPassword || password === hashedPassword;
+}
+
+function sendPasswordRecovery_(payload) {
+  const email = normalizeEmail_(payload.email);
+
+  if (!email) {
+    return { success: false, message: 'Email is required.' };
+  }
+
+  const spreadsheet = getSpreadsheet_();
+
+  if (!spreadsheet) {
+    return { success: false, message: 'No spreadsheet is connected to the Apps Script project.' };
+  }
+
+  const usersSheet = spreadsheet.getSheetByName(USERS_SHEET_NAME);
+
+  if (!usersSheet) {
+    return { success: false, message: `Sheet not found: ${USERS_SHEET_NAME}` };
+  }
+
+  const rows = usersSheet.getDataRange().getDisplayValues();
+
+  if (rows.length < 2) {
+    return { success: false, message: 'Users sheet has no user records.' };
+  }
+
+  const headers = getHeaderMap_(rows[0]);
+  const indexes = {
+    email: firstHeaderIndex_(headers, ['email', 'user', 'username']),
+    password: firstHeaderIndex_(headers, ['password']),
+    fullname: firstHeaderIndex_(headers, ['fullname', 'full name', 'name']),
+  };
+  const missingColumns = [];
+
+  if (indexes.email === -1) {
+    missingColumns.push('email');
+  }
+
+  if (indexes.password === -1) {
+    missingColumns.push('password');
+  }
+
+  if (indexes.fullname === -1) {
+    missingColumns.push('fullname');
+  }
+
+  if (missingColumns.length) {
+    return { success: false, message: 'Users sheet missing columns: ' + missingColumns.join(', ') };
+  }
+
+  for (let rowIndex = 1; rowIndex < rows.length; rowIndex += 1) {
+    const row = rows[rowIndex];
+    const rowEmail = normalizeEmail_(cellValue_(row, indexes.email));
+    const rowPassword = cellValue_(row, indexes.password);
+    const fullname = cellValue_(row, indexes.fullname) || 'User';
+
+    if (rowEmail === email) {
+      if (!rowPassword) {
+        return { success: false, message: 'Account found, but the password field is blank. Please contact your System Administrator.' };
+      }
+
+      try {
+        MailApp.sendEmail({
+          to: email,
+          subject: "Password Recovery - Member's Loan Approval System",
+          body: 'Hello ' + fullname + ',\n\n' +
+            "You requested help signing in to the Member's Loan Approval System.\n\n" +
+            'Your current password is: ' + rowPassword + '\n\n' +
+            'Please sign in and change it with your administrator if needed.\n\n' +
+            'If you did not request this email, please ignore it.',
+          name: APP_NAME,
+        });
+        return { success: true, message: 'Password recovery email has been sent to ' + email + '.' };
+      } catch (e) {
+        return { success: false, message: 'Failed to send password recovery email: ' + getErrorMessage_(e) };
+      }
+    }
+  }
+
+  return { success: false, message: 'No account was found for that email address.' };
+}
+
+function changePassword_(payload) {
+  const email = normalizeEmail_(payload.email);
+  const currentPassword = String(payload.currentPassword || '').trim();
+  const newPassword = String(payload.newPassword || '').trim();
+
+  if (!email || !currentPassword || !newPassword) {
+    return { success: false, message: 'Email, current password, and new password are required.' };
+  }
+
+  if (newPassword.length < 8) {
+    return { success: false, message: 'New password must be at least 8 characters.' };
+  }
+
+  if (newPassword === currentPassword) {
+    return { success: false, message: 'New password must be different from the current password.' };
+  }
+
+  const spreadsheet = getSpreadsheet_();
+
+  if (!spreadsheet) {
+    return { success: false, message: 'No spreadsheet is connected to the Apps Script project.' };
+  }
+
+  const usersSheet = spreadsheet.getSheetByName(USERS_SHEET_NAME);
+
+  if (!usersSheet) {
+    return { success: false, message: `Sheet not found: ${USERS_SHEET_NAME}` };
+  }
+
+  const rows = usersSheet.getDataRange().getDisplayValues();
+
+  if (rows.length < 2) {
+    return { success: false, message: 'Users sheet has no user records.' };
+  }
+
+  const headers = getHeaderMap_(rows[0]);
+  const indexes = {
+    email: firstHeaderIndex_(headers, ['email', 'user', 'username']),
+    password: firstHeaderIndex_(headers, ['password']),
+    firstLogin: firstHeaderIndex_(headers, ['firstlogin', 'first_login', 'first login']),
+  };
+  const missingColumns = [];
+
+  if (indexes.email === -1) {
+    missingColumns.push('email');
+  }
+
+  if (indexes.password === -1) {
+    missingColumns.push('password');
+  }
+
+  if (indexes.firstLogin === -1) {
+    missingColumns.push('FirstLogin');
+  }
+
+  if (missingColumns.length) {
+    return { success: false, message: 'Users sheet missing columns: ' + missingColumns.join(', ') };
+  }
+
+  for (let rowIndex = 1; rowIndex < rows.length; rowIndex += 1) {
+    const row = rows[rowIndex];
+    const rowEmail = normalizeEmail_(cellValue_(row, indexes.email));
+    const rowPassword = cellValue_(row, indexes.password);
+
+    if (rowEmail === email) {
+      if (!verifyPassword_(currentPassword, rowPassword)) {
+        return { success: false, message: 'Current password is incorrect.' };
+      }
+
+      usersSheet.getRange(rowIndex + 1, indexes.password + 1).setValue(newPassword);
+      usersSheet.getRange(rowIndex + 1, indexes.firstLogin + 1).setValue(false);
+
+      return { success: true, message: 'Password changed successfully.' };
+    }
+  }
+
+  return { success: false, message: 'No account was found for that email address.' };
+}
+
+function listAuditLogs_(payload) {
+  const spreadsheet = getSpreadsheet_();
+
+  if (!spreadsheet) {
+    throw new Error('No spreadsheet is connected to the Apps Script project.');
+  }
+
+  const requestsSheet = spreadsheet.getSheetByName(REQUESTS_SHEET_NAME);
+
+  if (!requestsSheet) {
+    return {
+      requests: [],
+      sheetConfigured: false,
+    };
+  }
+
+  const rows = requestsSheet.getDataRange().getDisplayValues();
+
+  if (rows.length < 2) {
+    return {
+      requests: [],
+      sheetConfigured: true,
+    };
+  }
+
+  const headers = getHeaderMap_(rows[0]);
+  const userFullnamesByEmail = getUserFullnamesByEmail_(spreadsheet);
+  const branchNamesById = getBranchNamesById_(spreadsheet);
+  const requests = rows
+    .slice(1)
+    .map(function(row) {
+      return enrichRequestBranch_(
+        enrichRequestUser_(mapRequestRow_(row, headers), userFullnamesByEmail),
+        branchNamesById,
+      );
+    })
+    .filter(function(request) {
+      return request.requestId || request.memberName || request.status;
+    });
+
+  return {
+    requests: requests,
+    sheetConfigured: true,
+  };
+}
+
+function listUsers_(payload) {
+  const spreadsheet = getSpreadsheet_();
+
+  if (!spreadsheet) {
+    throw new Error('No spreadsheet is connected to the Apps Script project.');
+  }
+
+  const usersSheet = spreadsheet.getSheetByName(USERS_SHEET_NAME);
+
+  if (!usersSheet) {
+    return {
+      users: [],
+      sheetConfigured: false,
+    };
+  }
+
+  const rows = usersSheet.getDataRange().getDisplayValues();
+
+  if (rows.length < 2) {
+    return {
+      users: [],
+      sheetConfigured: true,
+    };
+  }
+
+  const headers = getHeaderMap_(rows[0]);
+  const branchNamesById = getBranchNamesById_(spreadsheet);
+  const users = rows
+    .slice(1)
+    .map(function(row) {
+      return mapUserRow_(row, headers, branchNamesById);
+    })
+    .filter(function(user) {
+      return user.email;
+    });
+
+  return {
+    users: users,
+    sheetConfigured: true,
+  };
+}
+
+function saveUser_(payload) {
+  const spreadsheet = getSpreadsheet_();
+
+  if (!spreadsheet) {
+    throw new Error('No spreadsheet is connected to the Apps Script project.');
+  }
+
+  const user = payload.user || {};
+  const email = normalizeEmail_(user.email);
+  const password = String(user.password || '').trim();
+  const isNew = Boolean(user.isNew);
+
+  if (!email) {
+    return { success: false, message: 'Email is required.' };
+  }
+
+  if (isNew && !password) {
+    return { success: false, message: 'Password is required for new users.' };
+  }
+
+  const usersSheet = getOrCreateSheet_(spreadsheet, USERS_SHEET_NAME, USER_HEADERS);
+  const rows = usersSheet.getDataRange().getDisplayValues();
+  const headers = rows.length ? getHeaderMap_(rows[0]) : {};
+  const indexes = {
+    email: firstHeaderIndex_(headers, ['email', 'user', 'username']),
+    password: firstHeaderIndex_(headers, ['password']),
+    role: firstHeaderIndex_(headers, ['role']),
+    fullname: firstHeaderIndex_(headers, ['fullname', 'full name', 'name']),
+    position: firstHeaderIndex_(headers, ['position']),
+    branchid: firstHeaderIndex_(headers, ['branchid', 'branch_id', 'branch']),
+    firstLogin: firstHeaderIndex_(headers, ['firstlogin', 'first_login', 'first login']),
+  };
+  const missingColumns = [];
+
+  Object.keys(indexes).forEach(function(key) {
+    if (indexes[key] === -1) {
+      missingColumns.push(key === 'firstLogin' ? 'FirstLogin' : key);
+    }
+  });
+
+  if (missingColumns.length) {
+    return { success: false, message: 'Users sheet missing columns: ' + missingColumns.join(', ') };
+  }
+
+  let matchedRowNumber = -1;
+  let existingRow = null;
+
+  for (let rowIndex = 1; rowIndex < rows.length; rowIndex += 1) {
+    if (normalizeEmail_(cellValue_(rows[rowIndex], indexes.email)) === email) {
+      matchedRowNumber = rowIndex + 1;
+      existingRow = rows[rowIndex];
+      break;
+    }
+  }
+
+  if (isNew && matchedRowNumber !== -1) {
+    return { success: false, message: 'A user with that email already exists.' };
+  }
+
+  if (!isNew && matchedRowNumber === -1) {
+    return { success: false, message: 'User not found.' };
+  }
+
+  const record = {
+    email: email,
+    role: String(user.role || '').trim(),
+    fullname: String(user.fullname || '').trim(),
+    position: String(user.position || '').trim(),
+    branchid: String(user.branchid || '').trim(),
+    firstlogin: parseBoolean_(user.firstLogin) || isNew,
+  };
+
+  if (password) {
+    record.password = password;
+  }
+
+  if (isNew) {
+    appendRecord_(usersSheet, record);
+  } else {
+    updateRecord_(usersSheet, matchedRowNumber, record, existingRow);
+  }
+
+  return {
+    success: true,
+    message: isNew ? 'User added successfully.' : 'User updated successfully.',
+  };
+}
+
+function getSettings_(payload) {
+  return {
+    approverSignature: getSettingValue_('approver_signature'),
+  };
+}
+
+function updateSettings_(payload) {
+  const settings = payload.settings || {};
+  const approverSignature = String(settings.approverSignature || '').trim();
+
+  setSettingValue_('approver_signature', approverSignature);
+
+  return {
+    success: true,
+    message: 'Settings saved successfully.',
+    approverSignature: approverSignature,
+  };
+}
+
+function generateTemporaryPassword_() {
+  const chars =
+    'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$';
+  let password = '';
+  for (let i = 0; i < 12; i++) {
+    password += chars.charAt(Math.floor(Math.random() * chars.length));
+  }
+  return password;
 }
 
 function listRequests_(payload) {
@@ -298,11 +744,15 @@ function listRequests_(payload) {
   const email = normalizeEmail_(payload.email);
   const branchid = String(payload.branchid || '').trim();
   const userFullnamesByEmail = getUserFullnamesByEmail_(spreadsheet);
+  const branchNamesById = getBranchNamesById_(spreadsheet);
 
   const requests = rows
     .slice(1)
     .map(function(row) {
-      return enrichRequestUser_(mapRequestRow_(row, headers), userFullnamesByEmail);
+      return enrichRequestBranch_(
+        enrichRequestUser_(mapRequestRow_(row, headers), userFullnamesByEmail),
+        branchNamesById,
+      );
     })
     .filter(function(request) {
       return request.requestId || request.memberName || request.status;
@@ -346,10 +796,12 @@ function getRequestDetails_(payload) {
   }
 
   const request = mapRequestDetailRow_(match.row, match.headers);
+  const branchNamesById = getBranchNamesById_(spreadsheet);
   const summary = enrichRequestUser_(
     mapRequestRow_(match.row, match.headers),
     getUserFullnamesByEmail_(spreadsheet),
   );
+  enrichRequestBranch_(summary, branchNamesById);
   const otherLoans = getRelatedRows_(
     spreadsheet,
     OTHER_LOANS_SHEET_NAME,
@@ -399,6 +851,7 @@ function getRequestDetails_(payload) {
     requestedBy: summary.requestedBy,
     requestedByName: summary.requestedByName,
     branchid: summary.branchid,
+    branchName: summary.branchName,
     managerNotes: summary.managerNotes,
     approverNotes: summary.approverNotes,
     managerBy: summary.managerBy,
@@ -1023,6 +1476,20 @@ function mapMemberRow_(row, headers) {
   };
 }
 
+function mapUserRow_(row, headers, branchNamesById) {
+  const branchid = cellByAliases_(row, headers, ['branchid', 'branch_id', 'branch']);
+
+  return {
+    email: cellByAliases_(row, headers, ['email', 'user', 'username']),
+    role: cellByAliases_(row, headers, ['role']),
+    fullname: cellByAliases_(row, headers, ['fullname', 'full name', 'name']),
+    position: cellByAliases_(row, headers, ['position']),
+    branchid: branchid,
+    branchName: getBranchName_(branchNamesById, branchid),
+    firstLogin: parseBoolean_(cellByAliases_(row, headers, ['firstlogin', 'first_login', 'first login'])),
+  };
+}
+
 function mapRequestRow_(row, headers) {
   const recommendation = cellByAliases_(row, headers, ['recommendation']);
   const rawStatus = cellByAliases_(row, headers, ['status', 'requeststatus']);
@@ -1078,14 +1545,15 @@ function requestMatchesView_(request, view, dashboard) {
 
 function requestMatchesDashboard_(request, dashboard, email, branchid) {
   const requestOwner = normalizeEmail_(request.requestedBy);
-  const requestBranch = String(request.branchid || '').trim();
+  const requestBranch = normalizeBranchId_(request.branchid);
+  const userBranch = normalizeBranchId_(branchid);
 
   if (dashboard === 'teller') {
-    return !requestOwner || requestOwner === email;
+    return Boolean(email) && requestOwner === email;
   }
 
   if (dashboard === 'manager') {
-    return !requestBranch || !branchid || requestBranch === branchid;
+    return Boolean(userBranch) && requestBranch === userBranch;
   }
 
   return true;
@@ -1153,6 +1621,130 @@ function getUserFullnamesByEmail_(spreadsheet) {
   return fullnamesByEmail;
 }
 
+function getBranchNamesById_(spreadsheet) {
+  const branchesSheet = getBranchesSheet_(spreadsheet);
+  const branchNamesById = {};
+
+  if (!branchesSheet) {
+    return branchNamesById;
+  }
+
+  const rows = branchesSheet.getDataRange().getDisplayValues();
+
+  if (rows.length < 2) {
+    return branchNamesById;
+  }
+
+  const headers = getHeaderMap_(rows[0]);
+  const branchIdColumn = firstHeaderIndex_(headers, ['branchid', 'branch_id', 'branch code', 'branchcode', 'id']);
+  const branchNameColumn = firstHeaderIndex_(headers, ['branchname', 'branch_name', 'branch name', 'name']);
+
+  if (branchIdColumn === -1 || branchNameColumn === -1) {
+    return branchNamesById;
+  }
+
+  rows.slice(1).forEach(function(row) {
+    const branchid = normalizeBranchId_(cellValue_(row, branchIdColumn));
+    const branchName = cellValue_(row, branchNameColumn);
+
+    if (branchid && branchName) {
+      branchNamesById[branchid] = branchName;
+    }
+  });
+
+  return branchNamesById;
+}
+
+function getBranchesSheet_(spreadsheet) {
+  return getSheetByNameLoose_(spreadsheet, BRANCHES_SHEET_NAME, ['Branches', 'BranchList', 'Branch List']);
+}
+
+function getSettingsSheet_() {
+  const spreadsheet = getSpreadsheet_();
+
+  if (!spreadsheet) {
+    throw new Error('No spreadsheet is connected to the Apps Script project.');
+  }
+
+  return getOrCreateSheet_(spreadsheet, SETTINGS_SHEET_NAME, SETTINGS_HEADERS);
+}
+
+function getSettingValue_(key) {
+  const settingsSheet = getSettingsSheet_();
+  const rows = settingsSheet.getDataRange().getDisplayValues();
+
+  if (rows.length < 2) {
+    return '';
+  }
+
+  const headers = getHeaderMap_(rows[0]);
+  const keyColumn = firstHeaderIndex_(headers, ['key', 'name', 'setting']);
+  const valueColumn = firstHeaderIndex_(headers, ['value', 'settingvalue', 'setting_value']);
+
+  if (keyColumn === -1 || valueColumn === -1) {
+    return '';
+  }
+
+  for (let rowIndex = 1; rowIndex < rows.length; rowIndex += 1) {
+    if (normalizeHeader_(cellValue_(rows[rowIndex], keyColumn)) === normalizeHeader_(key)) {
+      return cellValue_(rows[rowIndex], valueColumn);
+    }
+  }
+
+  return '';
+}
+
+function setSettingValue_(key, value) {
+  const settingsSheet = getSettingsSheet_();
+  const rows = settingsSheet.getDataRange().getDisplayValues();
+  const headers = rows.length ? getHeaderMap_(rows[0]) : {};
+  const keyColumn = firstHeaderIndex_(headers, ['key', 'name', 'setting']);
+  const valueColumn = firstHeaderIndex_(headers, ['value', 'settingvalue', 'setting_value']);
+
+  if (keyColumn === -1 || valueColumn === -1) {
+    throw new Error('Settings sheet missing columns: key, value');
+  }
+
+  for (let rowIndex = 1; rowIndex < rows.length; rowIndex += 1) {
+    if (normalizeHeader_(cellValue_(rows[rowIndex], keyColumn)) === normalizeHeader_(key)) {
+      settingsSheet.getRange(rowIndex + 1, valueColumn + 1).setValue(value);
+      return;
+    }
+  }
+
+  const record = {};
+  record[SETTINGS_HEADERS[0]] = key;
+  record[SETTINGS_HEADERS[1]] = value;
+  appendRecord_(settingsSheet, record);
+}
+
+function getSheetByNameLoose_(spreadsheet, sheetName, aliases) {
+  const directMatch = spreadsheet.getSheetByName(sheetName);
+
+  if (directMatch) {
+    return directMatch;
+  }
+
+  const allowedNames = [sheetName].concat(aliases || []).map(normalizeHeader_);
+  const sheets = spreadsheet.getSheets();
+
+  for (let index = 0; index < sheets.length; index += 1) {
+    const normalizedSheetName = normalizeHeader_(sheets[index].getName());
+
+    if (allowedNames.indexOf(normalizedSheetName) !== -1) {
+      return sheets[index];
+    }
+  }
+
+  return null;
+}
+
+function getBranchName_(branchNamesById, branchid) {
+  const normalizedBranchId = normalizeBranchId_(branchid);
+
+  return branchNamesById[normalizedBranchId] || String(branchid || '').trim();
+}
+
 function enrichRequestUser_(request, fullnamesByEmail) {
   if (!request.requestedByName) {
     request.requestedByName = fullnamesByEmail[normalizeEmail_(request.requestedBy)] || request.requestedBy;
@@ -1165,11 +1757,21 @@ function enrichRequestUser_(request, fullnamesByEmail) {
   return request;
 }
 
+function enrichRequestBranch_(request, branchNamesById) {
+  request.branchName = getBranchName_(branchNamesById, request.branchid);
+
+  return request;
+}
+
 function normalizeHeader_(value) {
   return String(value || '').trim().toLowerCase().replace(/[^a-z0-9]/g, '');
 }
 
 function normalizeEmail_(value) {
+  return String(value || '').trim().toLowerCase();
+}
+
+function normalizeBranchId_(value) {
   return String(value || '').trim().toLowerCase();
 }
 
@@ -1418,6 +2020,14 @@ function copyObject_(value) {
 function parseBoolean_(value) {
   const normalized = String(value || '').trim().toLowerCase();
   return ['true', 'yes', 'y', '1'].indexOf(normalized) !== -1;
+}
+
+function getErrorMessage_(error) {
+  if (error && error.message) {
+    return error.message;
+  }
+
+  return String(error || 'Unknown error');
 }
 
 function getSpreadsheet_() {
