@@ -1,4 +1,5 @@
 import {
+  type CSSProperties,
   type FormEvent,
   type ReactNode,
   useCallback,
@@ -478,9 +479,14 @@ function LoginPage({
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [loginError, setLoginError] = useState('');
   const [showPassword, setShowPassword] = useState(false);
+  const [useBrandLogoImage, setUseBrandLogoImage] = useState(true);
 
   const canSubmit =
     email.trim().length > 0 && password.length > 0 && !isSubmitting;
+  const loginBackgroundStyle = {
+    '--login-background-image':
+      'url("/login-assets/login-background.png"), url("/login-assets/login-background.jpg"), url("/login-assets/login-background.webp")',
+  } as CSSProperties;
 
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -520,111 +526,160 @@ function LoginPage({
   };
 
   return (
-    <main className="login-shell">
+    <main className="login-shell" style={loginBackgroundStyle}>
+      <div className="login-curve login-curve-top" aria-hidden="true" />
+      <div className="login-curve login-curve-bottom" aria-hidden="true" />
+      <div className="login-dot-grid login-dot-grid-left" aria-hidden="true" />
+      <div className="login-dot-grid login-dot-grid-right" aria-hidden="true" />
+
       <section className="login-intro" aria-labelledby="login-app-title">
-        <div className="brand-mark">
-          <ShieldCheck size={30} aria-hidden="true" />
+        <div className="cooperative-brand" aria-label="Barbaza Multi-Purpose Cooperative">
+          {useBrandLogoImage ? (
+            <img
+              className="brand-logo-image"
+              src="/login-assets/coop-logo.png"
+              alt="Barbaza Multi-Purpose Cooperative"
+              onError={() => setUseBrandLogoImage(false)}
+            />
+          ) : (
+            <>
+              <div className="coop-emblem" aria-hidden="true">
+                <span className="coop-letter coop-letter-c">c</span>
+                <span className="coop-letter coop-letter-o">o</span>
+                <span className="coop-letter coop-letter-o2">o</span>
+                <span className="coop-letter coop-letter-p">p</span>
+                <span className="coop-flame" />
+              </div>
+              <div className="brand-divider" />
+              <div className="brand-wordmark">
+                <strong>BARBAZA</strong>
+                <span>MULTI-PURPOSE COOPERATIVE</span>
+                <em>&quot;Your Partner, Your Life&quot;</em>
+              </div>
+            </>
+          )}
         </div>
-        <p className="eyebrow">Barbaza MPC</p>
-        <h1 id="login-app-title">Member&apos;s Loan Approval</h1>
+        <h1 id="login-app-title">Member&apos;s Loan Approval System</h1>
         <p className="login-copy">Sign in with your registered account.</p>
 
-        <ConnectionNotice
-          activeStatus={activeStatus}
-          connectionState={connectionState}
-          compact
-        />
+        <div className="login-support">
+          <ConnectionNotice
+            activeStatus={activeStatus}
+            connectionState={connectionState}
+            compact
+          />
 
-        {errorMessage ? <p className="error-text">{errorMessage}</p> : null}
-
-        <button
-          className="secondary-button inline-button"
-          type="button"
-          onClick={onHealthCheck}
-          disabled={connectionState === 'checking'}
-        >
-          <RefreshCw size={17} aria-hidden="true" />
-          Test Connection
-        </button>
-      </section>
-
-      <section className="login-panel" aria-labelledby="login-title">
-        <div className="panel-heading">
-          <div>
-            <p className="eyebrow">Secure Access</p>
-            <h2 id="login-title">User Login</h2>
-          </div>
-          <LockKeyhole size={24} aria-hidden="true" />
-        </div>
-
-        <form className="login-form" onSubmit={handleSubmit}>
-          <label htmlFor="email">Email</label>
-          <div className="input-shell">
-            <Mail size={18} aria-hidden="true" />
-            <input
-              autoComplete="email"
-              id="email"
-              inputMode="email"
-              name="email"
-              onChange={(event) => setEmail(event.target.value)}
-              placeholder="name@example.com"
-              type="email"
-              value={email}
-            />
-          </div>
-
-          <label htmlFor="password">Password</label>
-          <div className="input-shell">
-            <LockKeyhole size={18} aria-hidden="true" />
-            <input
-              autoComplete="current-password"
-              id="password"
-              name="password"
-              onChange={(event) => setPassword(event.target.value)}
-              placeholder="Enter password"
-              type={showPassword ? 'text' : 'password'}
-              value={password}
-            />
-            <button
-              className="icon-button"
-              type="button"
-              onClick={() => setShowPassword((value) => !value)}
-              aria-label={showPassword ? 'Hide password' : 'Show password'}
-            >
-              {showPassword ? (
-                <EyeOff size={18} aria-hidden="true" />
-              ) : (
-                <Eye size={18} aria-hidden="true" />
-              )}
-            </button>
-          </div>
-
-          {loginError ? <p className="error-text">{loginError}</p> : null}
+          {errorMessage ? <p className="error-text">{errorMessage}</p> : null}
 
           <button
-            className="primary-button"
-            type="submit"
-            disabled={!canSubmit}
+            className="secondary-button inline-button"
+            type="button"
+            onClick={onHealthCheck}
+            disabled={connectionState === 'checking'}
           >
-            <LogIn size={18} aria-hidden="true" />
-            {isSubmitting ? 'Signing In' : 'Sign In'}
+            <RefreshCw size={17} aria-hidden="true" />
+            Test Connection
           </button>
+        </div>
+      </section>
 
-          <div className="forgot-password-section">
-            <button
-              className="text-button"
-              type="button"
-              onClick={() => {
-                const userEmail = prompt('Enter your email address to receive password recovery instructions:');
-                if (userEmail) {
-                  sendPasswordRecoveryEmail(userEmail.trim());
-                }
-              }}
-            >
-              Forgot Password?
-            </button>
+      <section className="login-visual" aria-label="User login">
+        <div className="login-laptop" aria-hidden="true">
+          <div className="login-laptop-screen" />
+          <div className="login-laptop-base" />
+        </div>
+        <div className="login-shield-badge" aria-hidden="true">
+          <ShieldCheck size={76} />
+        </div>
+        <div className="login-document-badge" aria-hidden="true">
+          <ClipboardCheck size={60} />
+        </div>
+        <div className="login-plant" aria-hidden="true">
+          <span />
+          <span />
+          <span />
+        </div>
+
+        <section className="login-panel" aria-labelledby="login-title">
+          <div className="login-avatar" aria-hidden="true">
+            <LockKeyhole size={58} />
           </div>
-        </form>
+          <div className="panel-heading login-panel-heading">
+            <div>
+              <p className="eyebrow">Secure Access</p>
+              <h2 id="login-title">User Login</h2>
+            </div>
+          </div>
+
+          <form className="login-form" onSubmit={handleSubmit}>
+            <label htmlFor="email">Email Address</label>
+            <div className="input-shell">
+              <Mail size={18} aria-hidden="true" />
+              <input
+                autoComplete="email"
+                id="email"
+                inputMode="email"
+                name="email"
+                onChange={(event) => setEmail(event.target.value)}
+                placeholder="name@example.com"
+                type="email"
+                value={email}
+              />
+            </div>
+
+            <label htmlFor="password">Password</label>
+            <div className="input-shell">
+              <LockKeyhole size={18} aria-hidden="true" />
+              <input
+                autoComplete="current-password"
+                id="password"
+                name="password"
+                onChange={(event) => setPassword(event.target.value)}
+                placeholder="Enter password"
+                type={showPassword ? 'text' : 'password'}
+                value={password}
+              />
+              <button
+                className="icon-button"
+                type="button"
+                onClick={() => setShowPassword((value) => !value)}
+                aria-label={showPassword ? 'Hide password' : 'Show password'}
+              >
+                {showPassword ? (
+                  <EyeOff size={18} aria-hidden="true" />
+                ) : (
+                  <Eye size={18} aria-hidden="true" />
+                )}
+              </button>
+            </div>
+
+            {loginError ? <p className="error-text">{loginError}</p> : null}
+
+            <button
+              className="primary-button"
+              type="submit"
+              disabled={!canSubmit}
+            >
+              <LogIn size={18} aria-hidden="true" />
+              {isSubmitting ? 'Signing In' : 'Sign In'}
+            </button>
+
+            <div className="forgot-password-section">
+              <button
+                className="text-button"
+                type="button"
+                onClick={() => {
+                  const userEmail = prompt('Enter your email address to receive password recovery instructions:');
+                  if (userEmail) {
+                    sendPasswordRecoveryEmail(userEmail.trim());
+                  }
+                }}
+              >
+                Forgot Password?
+              </button>
+            </div>
+          </form>
+        </section>
       </section>
     </main>
   );
@@ -925,7 +980,7 @@ function AdminAuditLogs() {
           return;
         }
 
-        setRequests(result.requests);
+        setRequests(sortLoanRequestsNewestFirst(result.requests));
         setSheetConfigured(result.sheetConfigured);
       } catch (error) {
         if (isCurrent) {
@@ -1047,12 +1102,12 @@ function AdminUsers() {
           type="button"
           onClick={() => {
             setEditingUser(null);
-            setIsAdding((value) => !value);
+            setIsAdding(true);
             setSuccessMessage('');
           }}
         >
-          {isAdding ? <X size={17} aria-hidden="true" /> : <Plus size={17} aria-hidden="true" />}
-          {isAdding ? 'Close' : 'Add User'}
+          <Plus size={17} aria-hidden="true" />
+          Add User
         </button>
         <span className="count-chip">{isLoading ? 'Loading' : `${users.length} users`}</span>
       </div>
@@ -1061,7 +1116,7 @@ function AdminUsers() {
       {successMessage ? <p className="notice-text">{successMessage}</p> : null}
 
       {(isAdding || editingUser) ? (
-        <AdminUserForm
+        <AdminUserModal
           key={editingUser?.email || 'new-user'}
           user={editingUser}
           onCancel={() => {
@@ -1111,6 +1166,46 @@ function AdminUsers() {
             <span>{isLoading ? 'Loading users.' : 'No users found.'}</span>
           </div>
         )}
+      </div>
+    </div>
+  );
+}
+
+function AdminUserModal({
+  user,
+  onCancel,
+  onSaved,
+}: {
+  user: AdminUser | null;
+  onCancel: () => void;
+  onSaved: (message?: string) => void;
+}) {
+  const title = user ? 'Edit User' : 'Add User';
+
+  return (
+    <div className="modal-overlay" onClick={onCancel}>
+      <div
+        aria-labelledby="admin-user-modal-title"
+        aria-modal="true"
+        className="modal-panel user-modal"
+        onClick={(event) => event.stopPropagation()}
+        role="dialog"
+      >
+        <div className="modal-header">
+          <h3 id="admin-user-modal-title">{title}</h3>
+          <button
+            className="icon-action"
+            type="button"
+            onClick={onCancel}
+            title="Close"
+          >
+            <X size={18} aria-hidden="true" />
+          </button>
+        </div>
+
+        <div className="modal-content">
+          <AdminUserForm user={user} onCancel={onCancel} onSaved={onSaved} />
+        </div>
       </div>
     </div>
   );
@@ -1713,18 +1808,6 @@ function Dashboard({
 
           {requestError ? <p className="error-text">{requestError}</p> : null}
 
-          {showRequestForm && isTellerDashboard ? (
-            <NewRequestForm
-              editingRequest={editingRequest}
-              onCancel={() => {
-                setShowRequestForm(false);
-                setEditingRequest(null);
-              }}
-              onCreated={handleRequestCreated}
-              user={user}
-            />
-          ) : null}
-
           <RequestTable
             isLoading={isLoading}
             requests={requests}
@@ -1782,6 +1865,42 @@ function Dashboard({
               void handleReturnToManager(viewedRequest, notes)
             }
           />
+        ) : null}
+
+        {showRequestForm && isTellerDashboard ? (
+          <div className="modal-overlay" onClick={() => {
+            setShowRequestForm(false);
+            setEditingRequest(null);
+          }}>
+            <div className="modal-panel detail-modal" onClick={(e) => e.stopPropagation()}>
+              <div className="modal-header">
+                <h3>{editingRequest ? 'Edit Request' : 'New Request'}</h3>
+                <button
+                  className="icon-action"
+                  type="button"
+                  onClick={() => {
+                    setShowRequestForm(false);
+                    setEditingRequest(null);
+                  }}
+                  title="Close"
+                >
+                  <X size={18} aria-hidden="true" />
+                </button>
+              </div>
+
+              <div className="modal-content">
+                <NewRequestForm
+                  editingRequest={editingRequest}
+                  onCancel={() => {
+                    setShowRequestForm(false);
+                    setEditingRequest(null);
+                  }}
+                  onCreated={handleRequestCreated}
+                  user={user}
+                />
+              </div>
+            </div>
+          </div>
         ) : null}
 
         <section className="backend-strip" aria-label="Backend details">
@@ -2622,7 +2741,7 @@ function RequestDetailPanel({
   const canApprove = dashboard === 'approver' && isForwarded;
   const canDisapprove = dashboard === 'approver' && isForwarded;
   const canReturnToManager = dashboard === 'approver' && isForwarded;
-  const canPrint = dashboard === 'teller' && (isPending || isReturned || isApproved);
+  const canPrint = dashboard === 'teller' && isApproved;
   const canManageNotes = canForward || canReturn;
   const canManageApproverNotes = canReturnToManager;
   const requestDetails = details?.request;
@@ -3528,7 +3647,7 @@ function useLoanRequests(
           return;
         }
 
-        setRequests(result.requests);
+        setRequests(sortLoanRequestsNewestFirst(result.requests));
         setSheetConfigured(result.sheetConfigured);
       } catch (error) {
         if (!isCurrent) {
@@ -3692,6 +3811,62 @@ function getRequestKey(request: LoanRequest) {
     request.status,
     request.requestedAt,
   ].join('|');
+}
+
+function sortLoanRequestsNewestFirst(requests: LoanRequest[]) {
+  return requests
+    .map((request, index) => ({ index, request }))
+    .sort((left, right) => {
+      const requestedAtDelta =
+        getDateSortTime(right.request.requestedAt) -
+        getDateSortTime(left.request.requestedAt);
+
+      if (requestedAtDelta !== 0) {
+        return requestedAtDelta;
+      }
+
+      const requestIdDelta =
+        getRequestIdSortTime(right.request.requestId) -
+        getRequestIdSortTime(left.request.requestId);
+
+      if (requestIdDelta !== 0) {
+        return requestIdDelta;
+      }
+
+      return left.index - right.index;
+    })
+    .map(({ request }) => request);
+}
+
+function getDateSortTime(value: string) {
+  const trimmed = value.trim();
+
+  if (!trimmed) {
+    return 0;
+  }
+
+  const parsed = Date.parse(trimmed);
+
+  return Number.isNaN(parsed) ? 0 : parsed;
+}
+
+function getRequestIdSortTime(requestId: string) {
+  const match = requestId.match(/^LR-(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})(\d{2})$/);
+
+  if (!match) {
+    return 0;
+  }
+
+  const [, year, month, day, hour, minute, second] = match;
+
+  return new Date(
+    Number(year),
+    Number(month) - 1,
+    Number(day),
+    Number(hour),
+    Number(minute),
+    Number(second),
+  ).getTime();
 }
 
 function titleCase(value: string) {

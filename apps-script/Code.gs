@@ -498,7 +498,7 @@ function changePassword_(payload) {
         return { success: false, message: 'Current password is incorrect.' };
       }
 
-      usersSheet.getRange(rowIndex + 1, indexes.password + 1).setValue(newPassword);
+      usersSheet.getRange(rowIndex + 1, indexes.password + 1).setValue(hashPassword_(newPassword));
       usersSheet.getRange(rowIndex + 1, indexes.firstLogin + 1).setValue(false);
 
       return { success: true, message: 'Password changed successfully.' };
@@ -538,20 +538,84 @@ function listAuditLogs_(payload) {
   const branchNamesById = getBranchNamesById_(spreadsheet);
   const requests = rows
     .slice(1)
-    .map(function(row) {
-      return enrichRequestBranch_(
-        enrichRequestUser_(mapRequestRow_(row, headers), userFullnamesByEmail),
-        branchNamesById,
+    .map(function(row, rowIndex) {
+      return {
+        request: enrichRequestBranch_(
+          enrichRequestUser_(mapRequestRow_(row, headers), userFullnamesByEmail),
+          branchNamesById,
+        ),
+        rowIndex: rowIndex,
+      };
+    })
+    .filter(function(entry) {
+      const request = entry.request;
+      return request.requestId || request.memberName || request.status;
+    })
+    .sort(function(left, right) {
+      return compareRequestsNewestFirst_(
+        left.request,
+        right.request,
+        left.rowIndex,
+        right.rowIndex,
       );
     })
-    .filter(function(request) {
-      return request.requestId || request.memberName || request.status;
+    .map(function(entry) {
+      return entry.request;
     });
 
   return {
     requests: requests,
     sheetConfigured: true,
   };
+}
+
+function compareRequestsNewestFirst_(leftRequest, rightRequest, leftIndex, rightIndex) {
+  const requestedAtDelta =
+    getRequestDateSortTime_(rightRequest.requestedAt) -
+    getRequestDateSortTime_(leftRequest.requestedAt);
+
+  if (requestedAtDelta !== 0) {
+    return requestedAtDelta;
+  }
+
+  const requestIdDelta =
+    getRequestIdSortTime_(rightRequest.requestId) -
+    getRequestIdSortTime_(leftRequest.requestId);
+
+  if (requestIdDelta !== 0) {
+    return requestIdDelta;
+  }
+
+  return rightIndex - leftIndex;
+}
+
+function getRequestDateSortTime_(value) {
+  const trimmed = String(value || '').trim();
+
+  if (!trimmed) {
+    return 0;
+  }
+
+  const parsed = new Date(trimmed).getTime();
+
+  return isNaN(parsed) ? 0 : parsed;
+}
+
+function getRequestIdSortTime_(requestId) {
+  const match = String(requestId || '').match(/^LR-(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})(\d{2})$/);
+
+  if (!match) {
+    return 0;
+  }
+
+  return new Date(
+    Number(match[1]),
+    Number(match[2]) - 1,
+    Number(match[3]),
+    Number(match[4]),
+    Number(match[5]),
+    Number(match[6]),
+  ).getTime();
 }
 
 function listUsers_(payload) {
@@ -669,7 +733,7 @@ function saveUser_(payload) {
   };
 
   if (password) {
-    record.password = password;
+    record.password = hashPassword_(password);
   }
 
   if (isNew) {
@@ -748,20 +812,35 @@ function listRequests_(payload) {
 
   const requests = rows
     .slice(1)
-    .map(function(row) {
-      return enrichRequestBranch_(
-        enrichRequestUser_(mapRequestRow_(row, headers), userFullnamesByEmail),
-        branchNamesById,
-      );
+    .map(function(row, rowIndex) {
+      return {
+        request: enrichRequestBranch_(
+          enrichRequestUser_(mapRequestRow_(row, headers), userFullnamesByEmail),
+          branchNamesById,
+        ),
+        rowIndex: rowIndex,
+      };
     })
-    .filter(function(request) {
+    .filter(function(entry) {
+      const request = entry.request;
       return request.requestId || request.memberName || request.status;
     })
-    .filter(function(request) {
-      return requestMatchesView_(request, view, dashboard);
+    .filter(function(entry) {
+      return requestMatchesView_(entry.request, view, dashboard);
     })
-    .filter(function(request) {
-      return requestMatchesDashboard_(request, dashboard, email, branchid);
+    .filter(function(entry) {
+      return requestMatchesDashboard_(entry.request, dashboard, email, branchid);
+    })
+    .sort(function(left, right) {
+      return compareRequestsNewestFirst_(
+        left.request,
+        right.request,
+        left.rowIndex,
+        right.rowIndex,
+      );
+    })
+    .map(function(entry) {
+      return entry.request;
     });
 
   return {
