@@ -55,6 +55,8 @@ const REQUEST_HEADERS = [
   'approver_notes',
   'manager_by',
   'manager_by_name',
+  'approver_id',
+  'approver_name',
   'review_and_recommendations',
   'date_of_approval',
   'loan_amount_approved',
@@ -935,6 +937,8 @@ function getRequestDetails_(payload) {
     approverNotes: summary.approverNotes,
     managerBy: summary.managerBy,
     managerByName: summary.managerByName,
+    approverBy: summary.approverBy,
+    approverByName: summary.approverByName,
     reviewAndRecommendations: summary.reviewAndRecommendations,
     dateOfApproval: summary.dateOfApproval,
     loanAmountApproved: summary.loanAmountApproved,
@@ -1183,6 +1187,7 @@ function returnRequest_(payload) {
 
 function approveRequest_(payload) {
   const requestId = String(payload.requestId || payload.request_id || '').trim();
+  const approver = getApproverIdentity_(payload);
 
   if (!requestId) {
     throw new Error('Request ID is required.');
@@ -1198,11 +1203,14 @@ function approveRequest_(payload) {
     '',
     '',
     getApprovalDetails_(payload),
+    approver.id,
+    approver.name,
   );
 }
 
 function disapproveRequest_(payload) {
   const requestId = String(payload.requestId || payload.request_id || '').trim();
+  const approver = getApproverIdentity_(payload);
 
   if (!requestId) {
     throw new Error('Request ID is required.');
@@ -1218,12 +1226,15 @@ function disapproveRequest_(payload) {
     '',
     '',
     getApprovalDetails_(payload),
+    approver.id,
+    approver.name,
   );
 }
 
 function returnToManager_(payload) {
   const requestId = String(payload.requestId || payload.request_id || '').trim();
   const notes = String(payload.notes || payload.approver_notes || '').trim();
+  const approver = getApproverIdentity_(payload);
 
   if (!requestId) {
     throw new Error('Request ID is required.');
@@ -1233,10 +1244,22 @@ function returnToManager_(payload) {
     throw new Error('Notes are required before returning a request to the branch manager.');
   }
 
-  return updateRequestStatus_(requestId, 'Returned to Manager', '', ['forwarded'], 'returned to branch manager', notes);
+  return updateRequestStatus_(
+    requestId,
+    'Returned to Manager',
+    '',
+    ['forwarded'],
+    'returned to branch manager',
+    notes,
+    '',
+    '',
+    null,
+    approver.id,
+    approver.name,
+  );
 }
 
-function updateRequestStatus_(requestId, nextStatus, notes, allowedStatuses, actionLabel, approverNotes, managerBy, managerByName, approvalDetails) {
+function updateRequestStatus_(requestId, nextStatus, notes, allowedStatuses, actionLabel, approverNotes, managerBy, managerByName, approvalDetails, approverId, approverName) {
   const spreadsheet = getSpreadsheet_();
 
   if (!spreadsheet) {
@@ -1263,6 +1286,8 @@ function updateRequestStatus_(requestId, nextStatus, notes, allowedStatuses, act
     approver_notes: approverNotes || summary.approverNotes || '',
     manager_by: managerBy || summary.managerBy || '',
     manager_by_name: managerByName || summary.managerByName || '',
+    approver_id: approverId || summary.approverBy || '',
+    approver_name: approverName || summary.approverByName || '',
     review_and_recommendations:
       approvalDetails && approvalDetails.reviewAndRecommendations
         ? approvalDetails.reviewAndRecommendations
@@ -1288,6 +1313,8 @@ function updateRequestStatus_(requestId, nextStatus, notes, allowedStatuses, act
     approverNotes: approverNotes || summary.approverNotes || '',
     managerBy: managerBy || summary.managerBy || '',
     managerByName: managerByName || summary.managerByName || '',
+    approverBy: approverId || summary.approverBy || '',
+    approverByName: approverName || summary.approverByName || '',
     reviewAndRecommendations:
       approvalDetails && approvalDetails.reviewAndRecommendations
         ? approvalDetails.reviewAndRecommendations
@@ -1304,6 +1331,35 @@ function updateRequestStatus_(requestId, nextStatus, notes, allowedStatuses, act
       approvalDetails && approvalDetails.additionalRequirements
         ? approvalDetails.additionalRequirements
         : summary.additionalRequirements || '',
+  };
+}
+
+function getApproverIdentity_(payload) {
+  payload = payload || {};
+
+  return {
+    id: String(
+      payload.approverId ||
+        payload.approver_id ||
+        payload.approverBy ||
+        payload.approver_by ||
+        payload.approvedBy ||
+        payload.approved_by ||
+        payload.userId ||
+        payload.user_id ||
+        '',
+    ).trim(),
+    name: String(
+      payload.approverName ||
+        payload.approver_name ||
+        payload.approverByName ||
+        payload.approver_by_name ||
+        payload.approvedByName ||
+        payload.approved_by_name ||
+        payload.userName ||
+        payload.user_name ||
+        '',
+    ).trim(),
   };
 }
 
@@ -1593,6 +1649,8 @@ function mapRequestRow_(row, headers) {
     approverNotes: cellByAliases_(row, headers, ['approver_notes', 'approvernotes', 'approverremarks']),
     managerBy: cellByAliases_(row, headers, ['manager_by', 'managerby', 'forwardedby', 'forwarded_by', 'manageremail']),
     managerByName: cellByAliases_(row, headers, ['manager_by_name', 'managerbyname', 'forwardedbyname', 'forwarded_by_name', 'managername']),
+    approverBy: cellByAliases_(row, headers, ['approver_id', 'approverid', 'approver_by', 'approverby', 'approved_by', 'approvedby', 'approveremail']),
+    approverByName: cellByAliases_(row, headers, ['approver_name', 'approvername', 'approver_by_name', 'approverbyname', 'approved_by_name', 'approvedbyname']),
     reviewAndRecommendations: cellByAliases_(row, headers, ['review_and_recommendations', 'reviewandrecommendations', 'review_recommendations', 'reviewrecommendations']),
     dateOfApproval: cellByAliases_(row, headers, ['date_of_approval', 'dateofapproval', 'approval_date', 'approvaldate']),
     loanAmountApproved: cellByAliases_(row, headers, ['loan_amount_approved', 'loanamountapproved', 'approved_amount', 'approvedamount']),
@@ -1831,6 +1889,10 @@ function enrichRequestUser_(request, fullnamesByEmail) {
 
   if (!request.managerByName) {
     request.managerByName = fullnamesByEmail[normalizeEmail_(request.managerBy)] || request.managerBy;
+  }
+
+  if (!request.approverByName) {
+    request.approverByName = fullnamesByEmail[normalizeEmail_(request.approverBy)] || request.approverBy;
   }
 
   return request;

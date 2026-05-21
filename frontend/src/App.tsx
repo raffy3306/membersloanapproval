@@ -1,4 +1,5 @@
 import {
+  type ChangeEvent,
   type CSSProperties,
   type FormEvent,
   type ReactNode,
@@ -12,6 +13,7 @@ import {
   Building2,
   CheckCircle2,
   ClipboardCheck,
+  Download,
   Edit,
   Eye,
   EyeOff,
@@ -29,25 +31,31 @@ import {
   Send,
   ShieldCheck,
   Trash2,
+  Upload,
   UserCheck,
+  Users,
   UsersRound,
   X,
   type LucideIcon,
 } from 'lucide-react';
 import {
-  AppsScriptConfigurationError,
-  type AppsScriptConnectionState,
+  LaravelConfigurationError,
+  type BackendConnectionState,
+  type AdminBranchInput,
+  type AdminMemberInput,
   type AdminUser,
   type AdminUserInput,
   type AppSettings,
   type AuthenticatedUser,
   type BackendHealth,
+  type Branch,
   type ComakerLoan,
   type GetComakerLoansPayload,
   type LoanRequest,
   type LoanRequestDetails,
   type LoanRequestListPayload,
   type LoanType,
+  type LoanAttachment,
   type Member,
   type NewComaker,
   type NewLoanRequest,
@@ -57,28 +65,176 @@ import {
   changePassword,
   checkBackendHealth,
   createLoanRequest,
+  deleteAttachment,
+  deleteBranch,
+  deleteMember,
   disapproveLoanRequest,
   forwardLoanRequest,
+  getAttachmentPreviewBlob,
+  getBranches,
   getLoanRequestDetails,
   getComakerLoans,
   getLoanTypes,
   getSettings,
+  listMembers,
   listAuditLogs,
   listLoanRequests,
   listUsers,
   loginUser,
   returnLoanRequest,
   returnLoanRequestToManager,
+  saveBranch,
   searchMembers,
   sendPasswordRecovery,
+  saveMember,
   saveUser,
   updateLoanRequest,
   updateSettings,
-} from './services/appsScriptClient';
+} from './services/laravelApiClient';
 import {
-  googleAppsScriptConfig,
-  hasGoogleAppsScriptUrl,
-} from './config/googleAppsScript';
+  hasLaravelApiUrl,
+  laravelApiConfig,
+} from './config/laravelApi';
+
+// CSV Helper Functions
+const memberCsvHeaders: Array<keyof Member> = [
+  'cif_key',
+  'client_name',
+  'membership_date',
+  'membership_type',
+  'sex',
+  'age',
+  'birthdate',
+  'contactnumber',
+  'address',
+  'branch_id',
+  'status',
+  'tin_number',
+  'occupation',
+  'educational_attainment',
+];
+
+function convertToCSV(members: Member[]): string {
+  const rows = members.map(member =>
+    memberCsvHeaders.map(header => escapeCsvCell(member[header])).join(',')
+  );
+
+  return [memberCsvHeaders.join(','), ...rows].join('\n');
+}
+
+function escapeCsvCell(value: unknown): string {
+  const stringValue = String(value || '');
+
+  if (/[",\r\n]/.test(stringValue)) {
+    return `"${stringValue.replace(/"/g, '""')}"`;
+  }
+
+  return stringValue;
+}
+
+function downloadCSV(csv: string, filename: string): void {
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+  const link = document.createElement('a');
+  const url = URL.createObjectURL(blob);
+
+  link.setAttribute('href', url);
+  link.setAttribute('download', filename);
+  link.style.visibility = 'hidden';
+
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+}
+
+function parseCSV(csv: string): Partial<Member>[] {
+  const lines = csv.trim().split(/\r?\n/);
+  if (lines.length < 2) return [];
+
+  const headers = parseCsvLine(lines[0]).map(normalizeMemberCsvHeader);
+  const members: Partial<Member>[] = [];
+
+  for (let i = 1; i < lines.length; i++) {
+    const row = lines[i];
+    if (!row.trim()) continue;
+
+    const values = parseCsvLine(row);
+    const member: Partial<Member> = {};
+
+    headers.forEach((header, index) => {
+      const value = values[index] || '';
+
+      if (header && value) {
+        member[header] = value;
+      }
+    });
+
+    if (member.cif_key) {
+      members.push(member);
+    }
+  }
+
+  return members;
+}
+
+function parseCsvLine(row: string): string[] {
+  const values: string[] = [];
+  let current = '';
+  let inQuotes = false;
+
+  for (let j = 0; j < row.length; j++) {
+    const char = row[j];
+    const nextChar = row[j + 1];
+
+    if (char === '"') {
+      if (inQuotes && nextChar === '"') {
+        current += '"';
+        j++;
+      } else {
+        inQuotes = !inQuotes;
+      }
+    } else if (char === ',' && !inQuotes) {
+      values.push(current.trim());
+      current = '';
+    } else {
+      current += char;
+    }
+  }
+
+  values.push(current.trim());
+  return values;
+}
+
+function normalizeMemberCsvHeader(header: string): keyof Member | '' {
+  const normalized = header.trim().toLowerCase().replace(/[^a-z0-9]/g, '');
+  const aliases: Record<string, keyof Member> = {
+    id: 'id',
+    cifkey: 'cif_key',
+    cif: 'cif_key',
+    clientname: 'client_name',
+    fullname: 'client_name',
+    name: 'client_name',
+    membershipdate: 'membership_date',
+    membershiptype: 'membership_type',
+    membertype: 'membership_type',
+    sex: 'sex',
+    age: 'age',
+    birthdate: 'birthdate',
+    birthdate2: 'birthdate',
+    dateofbirth: 'birthdate',
+    contactnumber: 'contactnumber',
+    contact: 'contactnumber',
+    address: 'address',
+    branchid: 'branch_id',
+    branch: 'branch_id',
+    status: 'status',
+    tin: 'tin_number',
+    tinnumber: 'tin_number',
+    occupation: 'occupation',
+    educationalattainment: 'educational_attainment',
+  };
+
+  return aliases[normalized] || '';
+}
 
 type StatusCopy = {
   label: string;
@@ -90,7 +246,7 @@ type DashboardKind = 'teller' | 'manager' | 'approver';
 type UserDashboardKind = DashboardKind | 'admin';
 type PageKind = 'login' | UserDashboardKind;
 type DashboardView = LoanRequestListPayload['view'];
-type AdminView = 'audit' | 'users' | 'settings';
+type AdminView = 'audit' | 'branches' | 'members' | 'users' | 'settings';
 
 type DashboardMenu = {
   id: DashboardView;
@@ -115,7 +271,7 @@ type AdminMenu = {
 
 type AdminDashboardProps = {
   activeStatus: StatusCopy;
-  connectionState: AppsScriptConnectionState;
+  connectionState: BackendConnectionState;
   errorMessage: string;
   onLogout: () => void;
   user: AuthenticatedUser;
@@ -124,7 +280,7 @@ type AdminDashboardProps = {
 type LoginPageProps = {
   activeStatus: StatusCopy;
   backendRows: BackendRow[];
-  connectionState: AppsScriptConnectionState;
+  connectionState: BackendConnectionState;
   errorMessage: string;
   onHealthCheck: () => void;
   onLoginSuccess: (user: AuthenticatedUser) => void;
@@ -132,18 +288,18 @@ type LoginPageProps = {
 
 type FirstLoginPasswordChangeProps = {
   activeStatus: StatusCopy;
-  connectionState: AppsScriptConnectionState;
+  connectionState: BackendConnectionState;
   errorMessage: string;
   onHealthCheck: () => void;
   onLogout: () => void;
-  onPasswordChanged: () => void;
+  onPasswordChanged: (user?: AuthenticatedUser) => void;
   user: AuthenticatedUser;
 };
 
 type DashboardProps = {
   activeStatus: StatusCopy;
   backendRows: BackendRow[];
-  connectionState: AppsScriptConnectionState;
+  connectionState: BackendConnectionState;
   dashboard: DashboardKind;
   errorMessage: string;
   onHealthCheck: () => void;
@@ -153,18 +309,18 @@ type DashboardProps = {
 
 const SESSION_STORAGE_KEY = 'members-loan-approval-user';
 
-const statusCopy: Record<AppsScriptConnectionState, StatusCopy> = {
+const statusCopy: Record<BackendConnectionState, StatusCopy> = {
   'not-configured': {
-    label: 'Needs Web App URL',
-    detail: 'Apps Script ID is saved. Deployment URL is still blank.',
+    label: 'Needs API URL',
+    detail: 'Set VITE_LARAVEL_API_URL in .env.local.',
   },
   checking: {
     label: 'Checking',
-    detail: 'Testing the Google Apps Script health route.',
+    detail: 'Testing the Laravel API health route.',
   },
   connected: {
     label: 'Connected',
-    detail: 'The Apps Script backend is responding.',
+    detail: 'The Laravel/MySQL backend is responding.',
   },
   failed: {
     label: 'Connection Failed',
@@ -244,6 +400,18 @@ const adminConfig = {
       icon: ClipboardCheck,
     },
     {
+      id: 'branches',
+      label: 'Branches',
+      description: 'Manage branch details',
+      icon: Building2,
+    },
+    {
+      id: 'members',
+      label: 'Members',
+      description: 'Manage member database',
+      icon: Users,
+    },
+    {
       id: 'users',
       label: 'Users',
       description: 'Manage accounts',
@@ -308,6 +476,30 @@ const comakerFields: Array<{
   { name: 'status', label: 'Status' },
 ];
 
+const loanStatusOptions = ['CURRENT', 'PAST DUE'] as const;
+
+const attachmentTypeOptions = [
+  'Payslip',
+  'Certifications',
+  'Title with Annotation',
+  'Original Receipts/Certificate of Registration (OR/CR)',
+  'H.O. signed Collateral Appraisals',
+  'Real Estate Mortgage (REM)',
+  'Chattel Mortgage (CM)',
+  'Registry of Deeds (ROD) O.R.',
+] as const;
+
+type AttachmentFormRow = {
+  rowId: string;
+  id?: string;
+  attachmentType: string;
+  file?: File;
+  originalFilename: string;
+  mimeType: string;
+  size: string;
+  uploadedAt: string;
+};
+
 const securityFields: Array<{
   name: keyof NewSecurity;
   label: string;
@@ -324,8 +516,8 @@ function App() {
     loadStoredUser(),
   );
   const [connectionState, setConnectionState] =
-    useState<AppsScriptConnectionState>(
-      hasGoogleAppsScriptUrl ? 'checking' : 'not-configured',
+    useState<BackendConnectionState>(
+      hasLaravelApiUrl ? 'checking' : 'not-configured',
     );
   const [health, setHealth] = useState<BackendHealth | null>(null);
   const [errorMessage, setErrorMessage] = useState('');
@@ -336,7 +528,7 @@ function App() {
     setHealth(null);
     setErrorMessage('');
 
-    if (!hasGoogleAppsScriptUrl) {
+    if (!hasLaravelApiUrl) {
       setConnectionState('not-configured');
       return;
     }
@@ -372,11 +564,9 @@ function App() {
 
   const backendRows = useMemo<BackendRow[]>(
     () => [
-      ['Apps Script ID', googleAppsScriptConfig.scriptId],
-      [
-        'Web App URL',
-        hasGoogleAppsScriptUrl ? googleAppsScriptConfig.webAppUrl : 'Not set',
-      ],
+      ['API URL', laravelApiConfig.apiUrl],
+      ['Backend', 'Laravel API'],
+      ['Database', health?.database ? health.database.toUpperCase() : 'MySQL'],
     ],
     [health],
   );
@@ -420,9 +610,10 @@ function App() {
         errorMessage={errorMessage}
         onHealthCheck={runHealthCheck}
         onLogout={handleLogout}
-        onPasswordChanged={() => {
+        onPasswordChanged={(updatedUserFromApi) => {
           const updatedUser = {
             ...currentUser,
+            ...updatedUserFromApi,
             firstLogin: false,
           };
 
@@ -741,7 +932,7 @@ function FirstLoginPasswordChange({
       }
 
       alert(result.message || 'Password changed successfully.');
-      onPasswordChanged();
+      onPasswordChanged(result.user);
     } catch (error) {
       setFormError(getErrorMessage(error));
     } finally {
@@ -952,6 +1143,8 @@ function AdminDashboard({
           </div>
 
           {activeView === 'audit' ? <AdminAuditLogs /> : null}
+          {activeView === 'branches' ? <AdminBranches /> : null}
+          {activeView === 'members' ? <AdminMembers /> : null}
           {activeView === 'users' ? <AdminUsers /> : null}
           {activeView === 'settings' ? <AdminSettings /> : null}
         </section>
@@ -1036,11 +1229,1082 @@ function AdminAuditLogs() {
               ? 'Loading audit logs.'
               : sheetConfigured
                 ? 'No audit records found.'
-                : 'LoanRequest sheet not found.'}
+                : 'Loan requests table is not available.'}
           </span>
         </div>
       )}
     </div>
+  );
+}
+
+function AdminBranches() {
+  const [branches, setBranches] = useState<Branch[]>([]);
+  const [editingBranch, setEditingBranch] = useState<Branch | null>(null);
+  const [isAdding, setIsAdding] = useState(false);
+  const [isLoading, setIsLoading] = useState(false);
+  const [errorMessage, setErrorMessage] = useState('');
+  const [successMessage, setSuccessMessage] = useState('');
+  const [refreshToken, setRefreshToken] = useState(0);
+
+  useEffect(() => {
+    let isCurrent = true;
+
+    const loadBranches = async () => {
+      setErrorMessage('');
+      setIsLoading(true);
+
+      try {
+        const result = await getBranches();
+
+        if (!isCurrent) {
+          return;
+        }
+
+        setBranches(result.branches);
+      } catch (error) {
+        if (isCurrent) {
+          setBranches([]);
+          setErrorMessage(getErrorMessage(error));
+        }
+      } finally {
+        if (isCurrent) {
+          setIsLoading(false);
+        }
+      }
+    };
+
+    void loadBranches();
+
+    return () => {
+      isCurrent = false;
+    };
+  }, [refreshToken]);
+
+  const handleSaved = (message?: string) => {
+    setIsAdding(false);
+    setEditingBranch(null);
+    setSuccessMessage(message || 'Branch saved.');
+    setRefreshToken((value) => value + 1);
+  };
+
+  const handleDeleteBranch = async (branch: Branch) => {
+    const branchLabel = branch.branch_name || branch.branch_code;
+
+    if (!window.confirm(`Delete ${branchLabel}?`)) {
+      return;
+    }
+
+    setErrorMessage('');
+    setSuccessMessage('');
+    setIsLoading(true);
+
+    try {
+      const result = await deleteBranch(branch.id);
+      setSuccessMessage(result.message || 'Branch deleted successfully.');
+      setRefreshToken((value) => value + 1);
+    } catch (error) {
+      setErrorMessage(getErrorMessage(error));
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  return (
+    <div className="admin-stack">
+      <div className="panel-actions">
+        <button
+          className="secondary-button inline-button"
+          type="button"
+          onClick={() => {
+            setEditingBranch(null);
+            setIsAdding(true);
+            setSuccessMessage('');
+          }}
+        >
+          <Plus size={17} aria-hidden="true" />
+          Add Branch
+        </button>
+        <span className="count-chip">
+          {isLoading ? 'Loading' : `${branches.length} branches`}
+        </span>
+      </div>
+
+      {errorMessage ? <p className="error-text">{errorMessage}</p> : null}
+      {successMessage ? <p className="notice-text">{successMessage}</p> : null}
+
+      {(isAdding || editingBranch) ? (
+        <AdminBranchModal
+          key={editingBranch?.id || 'new-branch'}
+          branch={editingBranch}
+          nextBranchCode={isAdding ? getNextBranchCode(branches) : undefined}
+          onCancel={() => {
+            setIsAdding(false);
+            setEditingBranch(null);
+          }}
+          onSaved={handleSaved}
+        />
+      ) : null}
+
+      <div className="admin-table admin-branches-table" role="table" aria-label="Branches">
+        <div className="admin-row admin-head" role="row">
+          <span role="columnheader">Branch Code</span>
+          <span role="columnheader">Name</span>
+          <span role="columnheader">Address</span>
+          <span role="columnheader">Phone</span>
+          <span role="columnheader">Action</span>
+        </div>
+
+        {branches.length ? (
+          branches.map((branch) => (
+            <div className="admin-row" role="row" key={branch.id}>
+              <span>{branch.branch_code || '-'}</span>
+              <strong>{branch.branch_name || '-'}</strong>
+              <span>{branch.address || '-'}</span>
+              <span>{branch.phone || '-'}</span>
+              <span className="row-actions">
+                <button
+                  className="icon-action"
+                  type="button"
+                  onClick={() => {
+                    setIsAdding(false);
+                    setEditingBranch(branch);
+                    setSuccessMessage('');
+                  }}
+                >
+                  <Edit size={16} aria-hidden="true" />
+                  Edit
+                </button>
+                <button
+                  className="icon-action danger-action"
+                  type="button"
+                  onClick={() => void handleDeleteBranch(branch)}
+                  disabled={isLoading}
+                >
+                  <Trash2 size={16} aria-hidden="true" />
+                  Delete
+                </button>
+              </span>
+            </div>
+          ))
+        ) : (
+          <div className="admin-empty" role="row">
+            <span>{isLoading ? 'Loading branches.' : 'No branches found.'}</span>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function AdminBranchModal({
+  branch,
+  nextBranchCode,
+  onCancel,
+  onSaved,
+}: {
+  branch: Branch | null;
+  nextBranchCode?: string;
+  onCancel: () => void;
+  onSaved: (message?: string) => void;
+}) {
+  const title = branch ? 'Edit Branch' : 'Add Branch';
+
+  return (
+    <div className="modal-overlay" onClick={onCancel}>
+      <div
+        aria-labelledby="admin-branch-modal-title"
+        aria-modal="true"
+        className="modal-panel branch-modal"
+        onClick={(event) => event.stopPropagation()}
+        role="dialog"
+      >
+        <div className="modal-header">
+          <h3 id="admin-branch-modal-title">{title}</h3>
+          <button
+            className="icon-action"
+            type="button"
+            onClick={onCancel}
+            title="Close"
+          >
+            <X size={18} aria-hidden="true" />
+          </button>
+        </div>
+
+        <div className="modal-content">
+          <AdminBranchForm
+            branch={branch}
+            nextBranchCode={nextBranchCode}
+            onCancel={onCancel}
+            onSaved={onSaved}
+          />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function AdminBranchForm({
+  branch,
+  nextBranchCode,
+  onCancel,
+  onSaved,
+}: {
+  branch: Branch | null;
+  nextBranchCode?: string;
+  onCancel: () => void;
+  onSaved: (message?: string) => void;
+}) {
+  const [form, setForm] = useState<AdminBranchInput>(() =>
+    createBranchForm(branch, nextBranchCode),
+  );
+  const [formError, setFormError] = useState('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const isNew = !branch;
+
+  const updateField = (field: keyof AdminBranchInput, value: string) => {
+    setForm((current) => ({
+      ...current,
+      [field]: value,
+    }));
+  };
+
+  const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setFormError('');
+
+    if (!form.branch_code.trim() || !form.branch_name.trim()) {
+      setFormError('Branch Code and Branch Name are required.');
+      return;
+    }
+
+    setIsSubmitting(true);
+
+    try {
+      const result = await saveBranch({
+        ...form,
+        branch_code: form.branch_code.trim(),
+        branch_name: form.branch_name.trim(),
+      });
+
+      if (!result.success) {
+        setFormError(result.message || 'Branch was not saved.');
+        return;
+      }
+
+      onSaved(result.message);
+    } catch (error) {
+      setFormError(getErrorMessage(error));
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  return (
+    <form className="request-form admin-branch-form" onSubmit={handleSubmit}>
+      <div className="form-grid compact">
+        <label className="field-control">
+          <span>Branch Code</span>
+          <input
+            value={form.branch_code}
+            onChange={(event) => updateField('branch_code', event.target.value)}
+            placeholder="e.g., BR001"
+            readOnly={isNew}
+            required
+          />
+        </label>
+        <label className="field-control">
+          <span>Branch Name</span>
+          <input
+            value={form.branch_name}
+            onChange={(event) => updateField('branch_name', event.target.value)}
+            placeholder="e.g., Main Branch"
+            required
+          />
+        </label>
+        <label className="field-control full">
+          <span>Address</span>
+          <textarea
+            value={form.address || ''}
+            onChange={(event) => updateField('address', event.target.value)}
+            placeholder="Branch address"
+          />
+        </label>
+        <label className="field-control">
+          <span>Phone</span>
+          <input
+            value={form.phone || ''}
+            onChange={(event) => updateField('phone', event.target.value)}
+            placeholder="Phone number"
+          />
+        </label>
+      </div>
+
+      {formError ? <p className="error-text">{formError}</p> : null}
+
+      <div className="form-actions">
+        <button className="secondary-button" type="button" onClick={onCancel}>
+          <X size={17} aria-hidden="true" />
+          Cancel
+        </button>
+        <button className="primary-button inline-primary" type="submit" disabled={isSubmitting}>
+          <Save size={17} aria-hidden="true" />
+          {isSubmitting ? 'Saving' : isNew ? 'Add Branch' : 'Save Branch'}
+        </button>
+      </div>
+    </form>
+  );
+}
+
+function createBranchForm(branch: Branch | null, nextBranchCode?: string): AdminBranchInput {
+  return {
+    id: branch?.id || '',
+    branch_code: branch?.branch_code || nextBranchCode || '',
+    branch_name: branch?.branch_name || '',
+    address: branch?.address || '',
+    phone: branch?.phone || '',
+  };
+}
+
+function getNextBranchCode(branches: Branch[]): string {
+  if (branches.length === 0) {
+    return '001';
+  }
+
+  // Extract numeric part from branch codes and find the maximum
+  let maxCode = 0;
+  branches.forEach((b) => {
+    const match = b.branch_code.match(/(\d+)/);
+    if (match) {
+      const num = parseInt(match[1], 10);
+      if (num > maxCode) {
+        maxCode = num;
+      }
+    }
+  });
+
+  // Generate next code with leading zeros (3 digits)
+  return String(maxCode + 1).padStart(3, '0');
+}
+
+function AdminMembers() {
+  const [members, setMembers] = useState<Member[]>([]);
+  const [editingMember, setEditingMember] = useState<Member | null>(null);
+  const [isAdding, setIsAdding] = useState(false);
+  const [isLoading, setIsLoading] = useState(false);
+  const [isImporting, setIsImporting] = useState(false);
+  const [errorMessage, setErrorMessage] = useState('');
+  const [successMessage, setSuccessMessage] = useState('');
+  const [searchQuery, setSearchQuery] = useState('');
+  const [refreshToken, setRefreshToken] = useState(0);
+
+  useEffect(() => {
+    let isCurrent = true;
+    const search = searchQuery.trim();
+
+    const loadMembers = async () => {
+      setErrorMessage('');
+      setIsLoading(true);
+
+      try {
+        const result = await listMembers({
+          query: search,
+          limit: 1000,
+        });
+
+        if (!isCurrent) {
+          return;
+        }
+
+        setMembers(sortMembersByName(result.members));
+      } catch (error) {
+        if (isCurrent) {
+          setMembers([]);
+          setErrorMessage(getErrorMessage(error));
+        }
+      } finally {
+        if (isCurrent) {
+          setIsLoading(false);
+        }
+      }
+    };
+
+    const timeoutId = window.setTimeout(() => {
+      void loadMembers();
+    }, search ? 250 : 0);
+
+    return () => {
+      isCurrent = false;
+      window.clearTimeout(timeoutId);
+    };
+  }, [refreshToken, searchQuery]);
+
+  const handleSaved = (message?: string, member?: Member) => {
+    setIsAdding(false);
+    setEditingMember(null);
+    setSuccessMessage(message || 'Member saved.');
+
+    if (member?.cif_key || member?.client_name) {
+      setSearchQuery(member.cif_key || member.client_name);
+    }
+
+    setRefreshToken((value) => value + 1);
+  };
+
+  const handleExportMembers = () => {
+    downloadCSV(convertToCSV(members), 'members.csv');
+  };
+
+  const handleImportMembers = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+
+    if (!file) {
+      return;
+    }
+
+    setErrorMessage('');
+    setSuccessMessage('');
+    setIsImporting(true);
+
+    try {
+      const importedMembers = parseCSV(await file.text())
+        .map(normalizeImportedMember)
+        .filter((member): member is AdminMemberInput =>
+          Boolean(member.cif_key && member.client_name),
+        );
+
+      if (!importedMembers.length) {
+        setErrorMessage('No valid members found in the CSV file.');
+        return;
+      }
+
+      const existingByCif = new Map(
+        members.map((member) => [member.cif_key.toLowerCase(), member]),
+      );
+      let created = 0;
+      let updated = 0;
+      let failed = 0;
+
+      for (const importedMember of importedMembers) {
+        const existing = existingByCif.get(importedMember.cif_key.toLowerCase());
+
+        try {
+          await saveMember({
+            ...importedMember,
+            id: existing?.id,
+          });
+
+          if (existing) {
+            updated++;
+          } else {
+            created++;
+          }
+        } catch {
+          failed++;
+        }
+      }
+
+      setSuccessMessage(
+        `Import finished: ${created} added, ${updated} updated${failed ? `, ${failed} failed` : ''}.`,
+      );
+      setRefreshToken((value) => value + 1);
+    } catch (error) {
+      setErrorMessage(getErrorMessage(error));
+    } finally {
+      setIsImporting(false);
+      event.currentTarget.value = '';
+    }
+  };
+
+  const handleDeleteMember = async (member: Member) => {
+    const memberLabel = member.client_name || member.cif_key;
+
+    if (!window.confirm(`Delete ${memberLabel}?`)) {
+      return;
+    }
+
+    setErrorMessage('');
+    setSuccessMessage('');
+    setIsLoading(true);
+
+    try {
+      const result = await deleteMember(member.id || member.cif_key);
+      setSuccessMessage(result.message || 'Member deleted successfully.');
+      setRefreshToken((value) => value + 1);
+    } catch (error) {
+      setErrorMessage(getErrorMessage(error));
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  return (
+    <div className="admin-stack">
+      <div className="panel-actions">
+        <label className="field-control admin-search-field">
+          <span>Search Members</span>
+          <input
+            type="search"
+            placeholder="Name, CIF, contact, branch, or occupation"
+            value={searchQuery}
+            onChange={(event) => setSearchQuery(event.target.value)}
+          />
+        </label>
+        <button
+          className="secondary-button inline-button"
+          type="button"
+          onClick={() => {
+            setEditingMember(null);
+            setIsAdding(true);
+            setSuccessMessage('');
+          }}
+        >
+          <Plus size={17} aria-hidden="true" />
+          Add Member
+        </button>
+        <label className={`secondary-button inline-button ${isImporting ? 'disabled-label' : ''}`}>
+          <Upload size={17} aria-hidden="true" />
+          {isImporting ? 'Importing' : 'Import'}
+          <input
+            type="file"
+            accept=".csv,text/csv"
+            onChange={handleImportMembers}
+            disabled={isImporting}
+            hidden
+          />
+        </label>
+        <button
+          className="secondary-button inline-button"
+          type="button"
+          onClick={handleExportMembers}
+          disabled={isLoading || !members.length}
+        >
+          <Download size={17} aria-hidden="true" />
+          Export
+        </button>
+        <span className="count-chip">
+          {isLoading ? 'Loading' : `${members.length} members`}
+        </span>
+      </div>
+
+      {errorMessage ? <p className="error-text">{errorMessage}</p> : null}
+      {successMessage ? <p className="notice-text">{successMessage}</p> : null}
+
+      {(isAdding || editingMember) ? (
+        <AdminMemberModal
+          key={editingMember?.id || editingMember?.cif_key || 'new-member'}
+          member={editingMember}
+          onCancel={() => {
+            setIsAdding(false);
+            setEditingMember(null);
+          }}
+          onSaved={handleSaved}
+        />
+      ) : null}
+
+      <div className="admin-table admin-members-table" role="table" aria-label="Members">
+        <div className="admin-row admin-head" role="row">
+          <span role="columnheader">CIF Key</span>
+          <span role="columnheader">Name</span>
+          <span role="columnheader">Type</span>
+          <span role="columnheader">Contact</span>
+          <span role="columnheader">Branch</span>
+          <span role="columnheader">Status</span>
+          <span role="columnheader">Action</span>
+        </div>
+
+        {members.length ? (
+          members.map((member) => (
+            <div className="admin-row" role="row" key={member.id || member.cif_key}>
+              <span>{member.cif_key || '-'}</span>
+              <strong>{member.client_name || '-'}</strong>
+              <span>{member.membership_type || '-'}</span>
+              <span>{member.contactnumber || '-'}</span>
+              <span title={member.branch_name}>{member.branch_name || member.branch_id || '-'}</span>
+              <span>{member.status || '-'}</span>
+              <span className="row-actions">
+                <button
+                  className="icon-action"
+                  type="button"
+                  onClick={() => {
+                    setIsAdding(false);
+                    setEditingMember(member);
+                    setSuccessMessage('');
+                  }}
+                >
+                  <Eye size={16} aria-hidden="true" />
+                  View
+                </button>
+                <button
+                  className="icon-action danger-action"
+                  type="button"
+                  onClick={() => void handleDeleteMember(member)}
+                  disabled={isLoading}
+                >
+                  <Trash2 size={16} aria-hidden="true" />
+                  Delete
+                </button>
+              </span>
+            </div>
+          ))
+        ) : (
+          <div className="admin-empty" role="row">
+            <span>{isLoading ? 'Loading members.' : 'No members found.'}</span>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function AdminMemberModal({
+  member,
+  onCancel,
+  onSaved,
+}: {
+  member: Member | null;
+  onCancel: () => void;
+  onSaved: (message?: string, member?: Member) => void;
+}) {
+  const title = member ? 'Member Details' : 'Add Member';
+
+  return (
+    <div className="modal-overlay" onClick={onCancel}>
+      <div
+        aria-labelledby="admin-member-modal-title"
+        aria-modal="true"
+        className="modal-panel member-modal"
+        onClick={(event) => event.stopPropagation()}
+        role="dialog"
+      >
+        <div className="modal-header">
+          <h3 id="admin-member-modal-title">{title}</h3>
+          <button
+            className="icon-action"
+            type="button"
+            onClick={onCancel}
+            title="Close"
+          >
+            <X size={18} aria-hidden="true" />
+          </button>
+        </div>
+
+        <div className="modal-content">
+          <AdminMemberForm member={member} onCancel={onCancel} onSaved={onSaved} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function AdminMemberForm({
+  member,
+  onCancel,
+  onSaved,
+}: {
+  member: Member | null;
+  onCancel: () => void;
+  onSaved: (message?: string, member?: Member) => void;
+}) {
+  const [form, setForm] = useState<AdminMemberInput>(() =>
+    createMemberForm(member),
+  );
+  const [formError, setFormError] = useState('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [branches, setBranches] = useState<Branch[]>([]);
+  const [isBranchesLoading, setIsBranchesLoading] = useState(false);
+  const isNew = !member;
+  const [isEditing, setIsEditing] = useState(isNew);
+  const isReadOnly = !isEditing;
+
+  useEffect(() => {
+    let isCurrent = true;
+
+    const loadBranches = async () => {
+      setIsBranchesLoading(true);
+
+      try {
+        const result = await getBranches();
+
+        if (!isCurrent) {
+          return;
+        }
+
+        setBranches(result.branches);
+      } catch (error) {
+        if (isCurrent) {
+          setBranches([]);
+        }
+      } finally {
+        if (isCurrent) {
+          setIsBranchesLoading(false);
+        }
+      }
+    };
+
+    void loadBranches();
+
+    return () => {
+      isCurrent = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!branches.length) {
+      return;
+    }
+
+    setForm((current) => {
+      const branchId = resolveMemberBranchId(current.branch_id, branches);
+
+      if (!branchId || branchId === current.branch_id) {
+        return current;
+      }
+
+      return {
+        ...current,
+        branch_id: branchId,
+      };
+    });
+  }, [branches]);
+
+  const updateField = (field: keyof AdminMemberInput, value: string) => {
+    if (isReadOnly) {
+      return;
+    }
+
+    setForm((current) => ({
+      ...current,
+      [field]: value,
+      ...(field === 'birthdate'
+        ? { age: calculateAgeFromBirthdate(value) }
+        : {}),
+    }));
+  };
+
+  const handleEnableEdit = (event: React.MouseEvent<HTMLButtonElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setFormError('');
+    setIsEditing(true);
+  };
+
+  const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setFormError('');
+
+    if (isReadOnly) {
+      return;
+    }
+
+    if (!form.cif_key.trim() || !form.client_name.trim()) {
+      setFormError('CIF Key and Client Name are required.');
+      return;
+    }
+
+    setIsSubmitting(true);
+
+    try {
+      const result = await saveMember({
+        ...form,
+        cif_key: form.cif_key.trim(),
+        client_name: form.client_name.trim(),
+      });
+
+      if (!result.success) {
+        setFormError(result.message || 'Member was not saved.');
+        return;
+      }
+
+      onSaved(result.message, result.member);
+    } catch (error) {
+      setFormError(getErrorMessage(error));
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  return (
+    <form className="request-form admin-member-form" onSubmit={handleSubmit}>
+      <div className="form-grid compact">
+        <label className="field-control">
+          <span>CIF Key</span>
+          <input
+            value={form.cif_key}
+            onChange={(event) => updateField('cif_key', event.target.value)}
+            readOnly={!isNew || isReadOnly}
+            required
+          />
+        </label>
+        <label className="field-control">
+          <span>Client Name</span>
+          <input
+            value={form.client_name}
+            onChange={(event) => updateField('client_name', event.target.value)}
+            readOnly={isReadOnly}
+            required
+          />
+        </label>
+        <label className="field-control">
+          <span>Membership Type</span>
+          <select
+            value={form.membership_type || ''}
+            onChange={(event) => updateField('membership_type', event.target.value)}
+            disabled={isReadOnly}
+            required
+          >
+            <option value="Regular Member">Regular Member</option>
+            <option value="Associate Member">Associate Member</option>
+          </select>
+        </label>
+        <label className="field-control">
+          <span>Membership Date</span>
+          <input
+            type="date"
+            value={form.membership_date || ''}
+            onChange={(event) => updateField('membership_date', event.target.value)}
+            readOnly={isReadOnly}
+          />
+        </label>
+        <label className="field-control">
+          <span>Sex</span>
+          <select
+            value={form.sex || ''}
+            onChange={(event) => updateField('sex', event.target.value)}
+            disabled={isReadOnly}
+          >
+            <option value="">-</option>
+            <option value="M">M</option>
+            <option value="F">F</option>
+            <option value="Other">Other</option>
+          </select>
+        </label>
+        <label className="field-control">
+          <span>Age</span>
+          <input
+            type="number"
+            value={form.age || ''}
+            readOnly
+          />
+        </label>
+        <label className="field-control">
+          <span>Birthdate</span>
+          <input
+            type="date"
+            value={form.birthdate || ''}
+            onChange={(event) => updateField('birthdate', event.target.value)}
+            readOnly={isReadOnly}
+          />
+        </label>
+        <label className="field-control">
+          <span>Contact Number</span>
+          <input
+            value={form.contactnumber || ''}
+            onChange={(event) => updateField('contactnumber', event.target.value)}
+            readOnly={isReadOnly}
+          />
+        </label>
+        <label className="field-control">
+          <span>Branch ID</span>
+          <select
+            value={form.branch_id || ''}
+            onChange={(event) => updateField('branch_id', event.target.value)}
+            disabled={isReadOnly || isBranchesLoading}
+          >
+            <option value="">- Select Branch -</option>
+            {branches.map((branch) => (
+              <option key={branch.id} value={branch.id}>
+                {branch.branch_name} ({branch.branch_code})
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="field-control">
+          <span>STATUS</span>
+          <select
+            value={form.status || 'ACTIVE'}
+            onChange={(event) => updateField('status', event.target.value)}
+            disabled={isReadOnly}
+            required
+          >
+            <option value="ACTIVE">ACTIVE</option>
+            <option value="INACTIVE">INACTIVE</option>
+          </select>
+        </label>
+        <label className="field-control">
+          <span>TIN Number</span>
+          <input
+            value={form.tin_number || ''}
+            onChange={(event) => updateField('tin_number', event.target.value)}
+            readOnly={isReadOnly}
+          />
+        </label>
+        <label className="field-control">
+          <span>Occupation</span>
+          <input
+            value={form.occupation || ''}
+            onChange={(event) => updateField('occupation', event.target.value)}
+            readOnly={isReadOnly}
+          />
+        </label>
+        <label className="field-control full">
+          <span>Address</span>
+          <textarea
+            value={form.address || ''}
+            onChange={(event) => updateField('address', event.target.value)}
+            readOnly={isReadOnly}
+          />
+        </label>
+        <label className="field-control full">
+          <span>Educational Attainment</span>
+          <input
+            value={form.educational_attainment || ''}
+            onChange={(event) => updateField('educational_attainment', event.target.value)}
+            readOnly={isReadOnly}
+          />
+        </label>
+      </div>
+
+      {formError ? <p className="error-text">{formError}</p> : null}
+
+      <div className="form-actions">
+        <button className="secondary-button" type="button" onClick={onCancel}>
+          <X size={17} aria-hidden="true" />
+          {isReadOnly ? 'Close' : 'Cancel'}
+        </button>
+        {isReadOnly ? (
+          <button
+            className="primary-button inline-primary"
+            type="button"
+            onClick={handleEnableEdit}
+          >
+            <Edit size={17} aria-hidden="true" />
+            Edit
+          </button>
+        ) : (
+          <button className="primary-button inline-primary" type="submit" disabled={isSubmitting}>
+            <Save size={17} aria-hidden="true" />
+            {isSubmitting ? 'Saving' : isNew ? 'Add Member' : 'Save Member'}
+          </button>
+        )}
+      </div>
+    </form>
+  );
+}
+
+function createMemberForm(member: Member | null): AdminMemberInput {
+  const birthdate = member?.birthdate || '';
+
+  return {
+    id: member?.id || '',
+    cif_key: member?.cif_key || '',
+    client_name: member?.client_name || '',
+    membership_date: member?.membership_date || '',
+    membership_type: member?.membership_type || 'Regular Member',
+    sex: member?.sex || '',
+    age: calculateAgeFromBirthdate(birthdate) || member?.age || '',
+    birthdate,
+    contactnumber: member?.contactnumber || '',
+    address: member?.address || '',
+    branch_id: member?.branch_id || '',
+    status: normalizeMemberStatus(member?.status),
+    tin_number: member?.tin_number || '',
+    occupation: member?.occupation || '',
+    educational_attainment: member?.educational_attainment || '',
+  };
+}
+
+function normalizeImportedMember(member: Partial<Member>): AdminMemberInput {
+  const birthdate = toDateInputValue(String(member.birthdate || ''));
+
+  return {
+    cif_key: String(member.cif_key || '').trim(),
+    client_name: String(member.client_name || '').trim(),
+    membership_date: toDateInputValue(String(member.membership_date || '')),
+    membership_type: String(member.membership_type || 'Regular Member').trim(),
+    sex: String(member.sex || '').trim(),
+    age: calculateAgeFromBirthdate(birthdate) || String(member.age || '').trim(),
+    birthdate,
+    contactnumber: String(member.contactnumber || '').trim(),
+    address: String(member.address || '').trim(),
+    branch_id: String(member.branch_id || '').trim(),
+    status: normalizeMemberStatus(member.status),
+    tin_number: String(member.tin_number || '').trim(),
+    occupation: String(member.occupation || '').trim(),
+    educational_attainment: String(member.educational_attainment || '').trim(),
+  };
+}
+
+function resolveMemberBranchId(value: string | undefined, branches: Branch[]) {
+  const normalizedValue = normalizeBranchLookupValue(value);
+
+  if (!normalizedValue) {
+    return '';
+  }
+
+  const branch =
+    branches.find((candidate) =>
+      normalizeBranchLookupValue(candidate.branch_code) === normalizedValue,
+    ) ||
+    branches.find((candidate) =>
+      normalizeBranchLookupValue(candidate.branch_name) === normalizedValue,
+    ) ||
+    branches.find((candidate) =>
+      normalizeBranchLookupValue(candidate.id) === normalizedValue,
+    );
+
+  return branch?.id || String(value || '').trim();
+}
+
+function normalizeBranchLookupValue(value: string | undefined) {
+  return String(value || '').trim().toLowerCase();
+}
+
+function normalizeMemberStatus(value: unknown) {
+  const normalized = String(value || '').trim().toUpperCase();
+
+  if (normalized === 'INACTIVE' || normalized === 'I') {
+    return 'INACTIVE';
+  }
+
+  return 'ACTIVE';
+}
+
+function calculateAgeFromBirthdate(value: string) {
+  const trimmed = value.trim();
+
+  if (!trimmed) {
+    return '';
+  }
+
+  const match = trimmed.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  const birthDate = match
+    ? new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]))
+    : new Date(trimmed);
+
+  if (Number.isNaN(birthDate.getTime())) {
+    return '';
+  }
+
+  const today = new Date();
+  let age = today.getFullYear() - birthDate.getFullYear();
+  const birthdayThisYear = new Date(
+    today.getFullYear(),
+    birthDate.getMonth(),
+    birthDate.getDate(),
+  );
+
+  if (today < birthdayThisYear) {
+    age -= 1;
+  }
+
+  return age >= 0 ? String(age) : '';
+}
+
+function sortMembersByName(members: Member[]) {
+  return [...members].sort((left, right) =>
+    (left.client_name || left.cif_key).localeCompare(
+      right.client_name || right.cif_key,
+    ),
   );
 }
 
@@ -1133,6 +2397,7 @@ function AdminUsers() {
           <span role="columnheader">Name</span>
           <span role="columnheader">Role</span>
           <span role="columnheader">Branch</span>
+          <span role="columnheader">Status</span>
           <span role="columnheader">First Login</span>
           <span role="columnheader">Action</span>
         </div>
@@ -1144,6 +2409,9 @@ function AdminUsers() {
               <strong>{adminUser.fullname || '-'}</strong>
               <span>{adminUser.role || '-'}</span>
               <span>{formatBranchLabel(adminUser.branchName, adminUser.branchid)}</span>
+              <span>
+                <StatusBadge status={formatUserStatus(adminUser.status)} />
+              </span>
               <span>{adminUser.firstLogin ? 'Yes' : 'No'}</span>
               <span>
                 <button
@@ -1229,10 +2497,45 @@ function AdminUserForm({
     position: user?.position || '',
     branchid: user?.branchid || '',
     firstLogin: user?.firstLogin ?? true,
+    status: user?.status || 'ACTIVE',
     isNew,
   });
   const [formError, setFormError] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [branches, setBranches] = useState<Branch[]>([]);
+  const [isBranchesLoading, setIsBranchesLoading] = useState(false);
+
+  useEffect(() => {
+    let isCurrent = true;
+
+    const loadBranches = async () => {
+      setIsBranchesLoading(true);
+
+      try {
+        const result = await getBranches();
+
+        if (!isCurrent) {
+          return;
+        }
+
+        setBranches(result.branches);
+      } catch (error) {
+        if (isCurrent) {
+          setBranches([]);
+        }
+      } finally {
+        if (isCurrent) {
+          setIsBranchesLoading(false);
+        }
+      }
+    };
+
+    void loadBranches();
+
+    return () => {
+      isCurrent = false;
+    };
+  }, []);
 
   const updateField = (field: keyof AdminUserInput, value: string | boolean) => {
     setForm((current) => ({
@@ -1296,16 +2599,24 @@ function AdminUserForm({
           >
             <option value="admin">admin</option>
             <option value="teller">teller</option>
-            <option value="branch_manager">branch_manager</option>
+            <option value="manager">manager</option>
             <option value="approver">approver</option>
           </select>
         </label>
         <label className="field-control">
-          <span>Branch ID</span>
-          <input
-            value={form.branchid}
+          <span>Branch</span>
+          <select
+            value={form.branchid || ''}
             onChange={(event) => updateField('branchid', event.target.value)}
-          />
+            disabled={isBranchesLoading}
+          >
+            <option value="">- Select Branch -</option>
+            {branches.map((branch) => (
+              <option key={branch.id} value={branch.id}>
+                {branch.branch_name} ({branch.branch_code})
+              </option>
+            ))}
+          </select>
         </label>
         <label className="field-control">
           <span>Full Name</span>
@@ -1321,6 +2632,16 @@ function AdminUserForm({
             value={form.position}
             onChange={(event) => updateField('position', event.target.value)}
           />
+        </label>
+        <label className="field-control">
+          <span>Status</span>
+          <select
+            value={form.status || 'ACTIVE'}
+            onChange={(event) => updateField('status', event.target.value)}
+          >
+            <option value="ACTIVE">Active</option>
+            <option value="INACTIVE">Inactive</option>
+          </select>
         </label>
         <label className="field-control checkbox-control">
           <span>First Login</span>
@@ -1346,6 +2667,10 @@ function AdminUserForm({
       </div>
     </form>
   );
+}
+
+function formatUserStatus(status?: string) {
+  return String(status || '').toUpperCase() === 'INACTIVE' ? 'Inactive' : 'Active';
 }
 
 function AdminSettings() {
@@ -1598,7 +2923,6 @@ function Dashboard({
   const handleApproveRequest = async (
     request: LoanRequest,
     reviewAndRecommendations?: string,
-    dateOfApproval?: string,
     loanAmountApproved?: string,
     additionalRequirements?: string
   ) => {
@@ -1617,8 +2941,9 @@ function Dashboard({
     try {
       await approveLoanRequest({
         requestId: request.requestId,
+        approverBy: user.id || user.email,
+        approverByName: user.fullname || user.email,
         reviewAndRecommendations,
-        dateOfApproval,
         loanAmountApproved,
         additionalRequirements,
       });
@@ -1651,6 +2976,8 @@ function Dashboard({
     try {
       await disapproveLoanRequest({
         requestId: request.requestId,
+        approverBy: user.id || user.email,
+        approverByName: user.fullname || user.email,
         reviewAndRecommendations,
         additionalRequirements,
       });
@@ -1684,6 +3011,8 @@ function Dashboard({
     try {
       await returnLoanRequestToManager({
         requestId: request.requestId,
+        approverBy: user.id || user.email,
+        approverByName: user.fullname || user.email,
         notes,
       });
       setViewedRequest(null);
@@ -1855,8 +3184,8 @@ function Dashboard({
               void handleForwardForApproval(viewedRequest, notes)
             }
             onReturn={(notes) => void handleReturnToTeller(viewedRequest, notes)}
-            onApprove={(reviewAndRecommendations, dateOfApproval, loanAmountApproved, additionalRequirements) =>
-              void handleApproveRequest(viewedRequest, reviewAndRecommendations, dateOfApproval, loanAmountApproved, additionalRequirements)
+            onApprove={(reviewAndRecommendations, loanAmountApproved, additionalRequirements) =>
+              void handleApproveRequest(viewedRequest, reviewAndRecommendations, loanAmountApproved, additionalRequirements)
             }
             onDisapprove={(reviewAndRecommendations, additionalRequirements) =>
               void handleDisapproveRequest(viewedRequest, reviewAndRecommendations, additionalRequirements)
@@ -1868,10 +3197,7 @@ function Dashboard({
         ) : null}
 
         {showRequestForm && isTellerDashboard ? (
-          <div className="modal-overlay" onClick={() => {
-            setShowRequestForm(false);
-            setEditingRequest(null);
-          }}>
+          <div className="modal-overlay">
             <div className="modal-panel detail-modal" onClick={(e) => e.stopPropagation()}>
               <div className="modal-header">
                 <h3>{editingRequest ? 'Edit Request' : 'New Request'}</h3>
@@ -1939,8 +3265,13 @@ function NewRequestForm({
   const [securities, setSecurities] = useState<NewSecurity[]>([
     createEmptySecurity(),
   ]);
+  const [attachments, setAttachments] = useState<AttachmentFormRow[]>([
+    createEmptyAttachmentRow(),
+  ]);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [formError, setFormError] = useState('');
+  const [attachmentMessage, setAttachmentMessage] = useState('');
+  const [previewingAttachmentId, setPreviewingAttachmentId] = useState('');
   const [memberSearchResults, setMemberSearchResults] = useState<Member[]>([]);
   const [showMemberDropdown, setShowMemberDropdown] = useState(false);
   const [isSearchingMembers, setIsSearchingMembers] = useState(false);
@@ -1973,6 +3304,8 @@ function NewRequestForm({
         setOtherLoans([createEmptyOtherLoan()]);
         setComakers([createEmptyComaker()]);
         setSecurities([createEmptySecurity()]);
+        setAttachments([createEmptyAttachmentRow()]);
+        setAttachmentMessage('');
         setFormError('');
         setIsLoadingEditingRequest(false);
         return;
@@ -1984,6 +3317,8 @@ function NewRequestForm({
       setOtherLoans([createEmptyOtherLoan()]);
       setComakers([createEmptyComaker()]);
       setSecurities([createEmptySecurity()]);
+      setAttachments([createEmptyAttachmentRow()]);
+      setAttachmentMessage('');
 
       if (!editingRequest.requestId) {
         setFormError('Unable to load full details: request ID is missing.');
@@ -2004,6 +3339,7 @@ function NewRequestForm({
         setOtherLoans(normalizeOtherLoansForForm(details.otherLoans));
         setComakers(normalizeComakersForForm(details.comakers));
         setSecurities(normalizeSecuritiesForForm(details.securities));
+        setAttachments(normalizeAttachmentsForForm(details.attachments));
       } catch (error) {
         if (!isCurrent) {
           return;
@@ -2042,8 +3378,13 @@ function NewRequestForm({
       const response = await searchMembers({ query });
       setMemberSearchResults(response.members || []);
       setShowMemberDropdown(response.members.length > 0);
+      if (response.members.length === 0) {
+        console.log(`No members found matching: ${query}`);
+      }
     } catch (error) {
+      console.error('Error searching members:', error);
       setMemberSearchResults([]);
+      setShowMemberDropdown(false);
     } finally {
       setIsSearchingMembers(false);
     }
@@ -2056,6 +3397,8 @@ function NewRequestForm({
       fullname: member.client_name || '',
       address: member.address || '',
       age: member.age || '',
+      share_capital: member.share_capital || '',
+      date_of_retirement: member.date_of_retirement || '',
     }));
     setShowMemberDropdown(false);
     setMemberSearchResults([]);
@@ -2126,21 +3469,113 @@ function NewRequestForm({
     );
   };
 
+  const handleAttachmentTypeChange = (index: number, value: string) => {
+    setAttachments((current) =>
+      current.map((attachment, rowIndex) =>
+        rowIndex === index
+          ? {
+              ...attachment,
+              attachmentType: value,
+            }
+          : attachment,
+      ),
+    );
+  };
+
+  const handleAttachmentFileChange = (
+    index: number,
+    files: FileList | null,
+  ) => {
+    const file = files?.[0];
+
+    if (!file) {
+      return;
+    }
+
+    setAttachments((current) =>
+      current.map((attachment, rowIndex) =>
+        rowIndex === index
+          ? {
+              ...attachment,
+              file,
+              originalFilename: file.name,
+              mimeType: file.type,
+              size: String(file.size),
+            }
+          : attachment,
+      ),
+    );
+  };
+
+  const handlePreviewAttachment = async (attachment: AttachmentFormRow) => {
+    setAttachmentMessage('');
+    setPreviewingAttachmentId(attachment.rowId);
+
+    try {
+      if (attachment.file) {
+        openPreviewBlob(attachment.file);
+        return;
+      }
+
+      if (!attachment.id) {
+        setAttachmentMessage('Select a file before previewing this attachment.');
+        return;
+      }
+
+      const blob = await getAttachmentPreviewBlob(attachment.id);
+      openPreviewBlob(blob);
+    } catch (error) {
+      setAttachmentMessage(getErrorMessage(error));
+    } finally {
+      setPreviewingAttachmentId('');
+    }
+  };
+
+  const handleRemoveAttachment = async (index: number) => {
+    const attachment = attachments[index];
+    setAttachmentMessage('');
+
+    if (attachment?.id) {
+      try {
+        await deleteAttachment(attachment.id);
+        setAttachmentMessage('Attachment removed.');
+      } catch (error) {
+        setAttachmentMessage(getErrorMessage(error));
+        return;
+      }
+    }
+
+    setAttachments((current) =>
+      current.length === 1
+        ? [createEmptyAttachmentRow()]
+        : current.filter((_, rowIndex) => rowIndex !== index),
+    );
+  };
+
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     setFormError('');
+    setAttachmentMessage('');
     setIsSubmitting(true);
 
-    const savedOtherLoans = otherLoans.filter((otherLoan) =>
-      Object.values(otherLoan).some((value) => value.trim()),
-    );
+    const savedOtherLoans = otherLoans
+      .map((otherLoan) => ({
+        loan_type: otherLoan.loan_type.trim(),
+        loan_amount: otherLoan.loan_amount.trim(),
+        balance: otherLoan.balance.trim(),
+        status: normalizeLoanRelationshipStatus(otherLoan.status),
+        analysis: otherLoan.analysis.trim(),
+      }))
+      .filter((otherLoan) =>
+        Object.values(otherLoan).some((value) => value.length > 0),
+      );
     const savedComakers = comakers
       .map((comaker) => ({
         fullname: comaker.fullname.trim(),
         loan_type: comaker.loan_type.trim(),
         loan_amount: comaker.loan_amount.trim(),
         loan_balance: comaker.loan_balance.trim(),
-        status: comaker.status.trim(),
+        status: normalizeLoanRelationshipStatus(comaker.status),
       }))
       .filter((comaker) =>
         Object.values(comaker).some((value) => value.length > 0),
@@ -2156,6 +3591,32 @@ function NewRequestForm({
       );
     const [comaker1 = '', comaker2 = '', comaker3 = '', comaker4 = ''] =
       savedComakers.map((comaker) => comaker.fullname);
+    const incompleteAttachment = attachments.find((attachment) => {
+      if (attachment.id) {
+        return !attachment.attachmentType;
+      }
+
+      return Boolean(attachment.file) !== Boolean(attachment.attachmentType);
+    });
+
+    if (incompleteAttachment) {
+      setFormError('Each attachment must have both a file and an attachment type.');
+      setIsSubmitting(false);
+      return;
+    }
+
+    const attachmentUploads = attachments
+      .filter((attachment) => attachment.file && attachment.attachmentType)
+      .map((attachment) => ({
+        attachmentType: attachment.attachmentType,
+        file: attachment.file as File,
+      }));
+    const attachmentUpdates = attachments
+      .filter((attachment) => attachment.id && attachment.attachmentType)
+      .map((attachment) => ({
+        id: attachment.id as string,
+        attachmentType: attachment.attachmentType,
+      }));
 
     try {
       const payload = {
@@ -2165,6 +3626,8 @@ function NewRequestForm({
         otherLoans: savedOtherLoans,
         comakers: savedComakers,
         securities: savedSecurities,
+        attachmentUploads,
+        attachmentUpdates,
         request: {
           ...request,
           request_id: editingRequest?.requestId || request.request_id,
@@ -2191,7 +3654,7 @@ function NewRequestForm({
   };
 
   return (
-    <form className="request-form" onSubmit={handleSubmit}>
+    <form className="request-form loan-request-form" onSubmit={handleSubmit}>
       <div className="form-section-heading">
         <div>
           <p className="eyebrow">{isEditing ? 'Edit Request' : 'New Request'}</p>
@@ -2253,6 +3716,9 @@ function NewRequestForm({
                   {isSearchingMembers && (
                     <div className="autocomplete-loading">Searching...</div>
                   )}
+                  {!isSearchingMembers && request.fullname.trim().length > 0 && memberSearchResults.length === 0 && !request.cif_key && (
+                    <div className="autocomplete-loading">No members found</div>
+                  )}
                 </div>
               </label>
             );
@@ -2294,6 +3760,7 @@ function NewRequestForm({
                   onChange={(event) =>
                     handleRequestChange(field.name, event.target.value)
                   }
+                  readOnly={['address'].includes(field.name) && String(request[field.name]).trim().length > 0}
                   value={request[field.name]}
                 />
               ) : (
@@ -2302,6 +3769,7 @@ function NewRequestForm({
                   onChange={(event) =>
                     handleRequestChange(field.name, event.target.value)
                   }
+                  readOnly={['cif_key', 'age', 'address'].includes(field.name) && String(request[field.name]).trim().length > 0}
                   required={field.name === 'cif_key'}
                   type={field.type || 'text'}
                   value={request[field.name]}
@@ -2318,7 +3786,7 @@ function NewRequestForm({
           <h3>Existing Loan Records</h3>
         </div>
         <button
-          className="secondary-button inline-button"
+          className="secondary-button inline-button request-action-button request-action-loan"
           type="button"
           onClick={() =>
             setOtherLoans((current) => [...current, createEmptyOtherLoan()])
@@ -2348,6 +3816,27 @@ function NewRequestForm({
                       {loanTypes.map((type) => (
                         <option key={type.loan_id} value={type.loantype}>
                           {type.loantype}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                );
+              }
+              if (field.name === 'status') {
+                return (
+                  <label className="field-control" key={field.name}>
+                    <span>{field.label}</span>
+                    <select
+                      name={`${field.name}-${index}`}
+                      onChange={(event) =>
+                        handleOtherLoanChange(index, field.name, event.target.value)
+                      }
+                      value={otherLoan[field.name]}
+                    >
+                      <option value="">Select Status</option>
+                      {loanStatusOptions.map((status) => (
+                        <option key={status} value={status}>
+                          {status}
                         </option>
                       ))}
                     </select>
@@ -2392,7 +3881,7 @@ function NewRequestForm({
           <h3>Add Comakers and Their Loans</h3>
         </div>
         <button
-          className="secondary-button inline-button"
+          className="secondary-button inline-button request-action-button request-action-comaker"
           type="button"
           onClick={() =>
             setComakers((current) => [...current, createEmptyComaker()])
@@ -2440,6 +3929,27 @@ function NewRequestForm({
                   </label>
                 );
               }
+              if (field.name === 'status') {
+                return (
+                  <label className="field-control" key={field.name}>
+                    <span>{field.label}</span>
+                    <select
+                      name={`${field.name}-${index}`}
+                      onChange={(event) =>
+                        handleComakerChange(index, field.name, event.target.value)
+                      }
+                      value={comaker[field.name]}
+                    >
+                      <option value="">Select Status</option>
+                      {loanStatusOptions.map((status) => (
+                        <option key={status} value={status}>
+                          {status}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                );
+              }
               return (
                 <label className="field-control" key={field.name}>
                   <span>{field.label}</span>
@@ -2478,7 +3988,7 @@ function NewRequestForm({
           <h3>Collateral / Security Details</h3>
         </div>
         <button
-          className="secondary-button inline-button"
+          className="secondary-button inline-button request-action-button request-action-security"
           type="button"
           onClick={() =>
             setSecurities((current) => [...current, createEmptySecurity()])
@@ -2523,14 +4033,105 @@ function NewRequestForm({
         ))}
       </div>
 
+      <div className="form-section-heading">
+        <div>
+          <p className="eyebrow">Attachments</p>
+          <h3>Upload Supporting Documents</h3>
+        </div>
+        <button
+          className="secondary-button inline-button request-action-button request-action-attachment"
+          type="button"
+          onClick={() =>
+            setAttachments((current) => [...current, createEmptyAttachmentRow()])
+          }
+        >
+          <Upload size={17} aria-hidden="true" />
+          Add Attachment
+        </button>
+      </div>
+
+      <div className="attachments-list">
+        {attachments.map((attachment, index) => (
+          <div className="attachment-row" key={attachment.rowId}>
+            <label className="field-control">
+              <span>Attachment Type</span>
+              <select
+                value={attachment.attachmentType}
+                onChange={(event) =>
+                  handleAttachmentTypeChange(index, event.target.value)
+                }
+              >
+                <option value="">Select Attachment Type</option>
+                {attachmentTypeOptions.map((type) => (
+                  <option key={type} value={type}>
+                    {type}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <label className="field-control attachment-file-control">
+              <span>File</span>
+              {attachment.id ? (
+                <span className="attachment-file-name">
+                  {attachment.originalFilename || 'Saved attachment'}
+                </span>
+              ) : (
+                <input
+                  type="file"
+                  onChange={(event) =>
+                    handleAttachmentFileChange(index, event.target.files)
+                  }
+                />
+              )}
+            </label>
+
+            <div className="attachment-meta">
+              <strong>{attachment.originalFilename || 'No file selected'}</strong>
+              <span>{formatFileSize(attachment.size)}</span>
+            </div>
+
+            <div className="attachment-actions">
+              <button
+                className="icon-action"
+                type="button"
+                onClick={() => void handlePreviewAttachment(attachment)}
+                disabled={!attachment.file && !attachment.id}
+              >
+                <Eye size={16} aria-hidden="true" />
+                {previewingAttachmentId === attachment.rowId ? 'Opening' : 'Preview'}
+              </button>
+              <button
+                className="icon-button remove-row-button"
+                type="button"
+                onClick={() => void handleRemoveAttachment(index)}
+                aria-label="Remove attachment"
+              >
+                <Trash2 size={18} aria-hidden="true" />
+              </button>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {attachmentMessage ? <p className="notice-text">{attachmentMessage}</p> : null}
+
       {formError ? <p className="error-text">{formError}</p> : null}
 
       <div className="form-actions">
-        <button className="secondary-button" type="button" onClick={onCancel}>
+        <button
+          className="secondary-button request-action-button request-action-cancel"
+          type="button"
+          onClick={onCancel}
+        >
           <X size={17} aria-hidden="true" />
           Cancel
         </button>
-        <button className="primary-button inline-primary" type="submit" disabled={!canSubmit}>
+        <button
+          className="primary-button inline-primary request-action-button request-action-save"
+          type="submit"
+          disabled={!canSubmit}
+        >
           <Save size={17} aria-hidden="true" />
           {isSubmitting
             ? isEditing
@@ -2561,7 +4162,7 @@ function RequestTable({
   if (isLoading) {
     emptyMessage = 'Loading requests.';
   } else if (!sheetConfigured) {
-    emptyMessage = 'LoanRequest sheet not found.';
+    emptyMessage = 'Loan requests table is not available.';
   }
 
   return (
@@ -2649,7 +4250,7 @@ function RequestDetailPanel({
   isReturningToManager: boolean;
   request: LoanRequest;
   onClose: () => void;
-  onApprove: (reviewAndRecommendations?: string, dateOfApproval?: string, loanAmountApproved?: string, additionalRequirements?: string) => void;
+  onApprove: (reviewAndRecommendations?: string, loanAmountApproved?: string, additionalRequirements?: string) => void;
   onDisapprove: (reviewAndRecommendations?: string, additionalRequirements?: string) => void;
   onEdit: () => void;
   onForward: (notes: string) => void;
@@ -2663,6 +4264,9 @@ function RequestDetailPanel({
   const [approverNotes, setApproverNotes] = useState(request.approverNotes || '');
   const [reviewAndRecommendations, setReviewAndRecommendations] = useState(request.reviewAndRecommendations || '');
   const [dateOfApproval, setDateOfApproval] = useState(request.dateOfApproval || '');
+  const [approvalClockValue, setApprovalClockValue] = useState(() =>
+    formatDateTimeForDisplay(new Date()),
+  );
   const [loanAmountApproved, setLoanAmountApproved] = useState(request.loanAmountApproved || '');
   const [additionalRequirements, setAdditionalRequirements] = useState(request.additionalRequirements || '');
   const [appSettings, setAppSettings] = useState<AppSettings>({});
@@ -2745,6 +4349,7 @@ function RequestDetailPanel({
   const canManageNotes = canForward || canReturn;
   const canManageApproverNotes = canReturnToManager;
   const requestDetails = details?.request;
+  const displayedDateOfApproval = dateOfApproval || approvalClockValue;
   const actionDisabled =
     isLoadingDetails ||
     isForwarding ||
@@ -2752,6 +4357,20 @@ function RequestDetailPanel({
     isApproving ||
     isDisapproving ||
     isReturningToManager;
+
+  useEffect(() => {
+    if (!canManageApproverNotes || dateOfApproval.trim()) {
+      return;
+    }
+
+    setApprovalClockValue(formatDateTimeForDisplay(new Date()));
+
+    const intervalId = window.setInterval(() => {
+      setApprovalClockValue(formatDateTimeForDisplay(new Date()));
+    }, 1000);
+
+    return () => window.clearInterval(intervalId);
+  }, [canManageApproverNotes, dateOfApproval]);
 
   return (
     <div className="modal-overlay" onClick={onClose}>
@@ -2787,6 +4406,20 @@ function RequestDetailPanel({
                     request.requestedByName ||
                     details?.requestedBy ||
                     request.requestedBy,
+                ],
+                [
+                  'Noted By:',
+                  details?.managerByName ||
+                    request.managerByName ||
+                    details?.managerBy ||
+                    request.managerBy,
+                ],
+                [
+                  'Approver',
+                  details?.approverByName ||
+                    request.approverByName ||
+                    details?.approverBy ||
+                    request.approverBy,
                 ],
                 [
                   'Branch',
@@ -2865,6 +4498,10 @@ function RequestDetailPanel({
               />
             ) : null}
 
+            {details?.attachments && details.attachments.length > 0 ? (
+              <AttachmentDetailList attachments={details.attachments} />
+            ) : null}
+
             <DetailSection
               title="Appraisal and Recommendation"
               rows={[
@@ -2941,12 +4578,12 @@ function RequestDetailPanel({
                 <small>Your detailed review and recommendations for this loan request.</small>
               </label>
 
-              <label className="field-control">
+              <label className="field-control approval-datetime-field">
                 <span>Date of Approval</span>
                 <input
-                  type="date"
-                  value={dateOfApproval}
-                  onChange={(event) => setDateOfApproval(event.target.value)}
+                  type="text"
+                  value={displayedDateOfApproval}
+                  readOnly
                 />
               </label>
 
@@ -2985,10 +4622,10 @@ function RequestDetailPanel({
               ) : null}
 
               {dateOfApproval.trim() ? (
-                <label className="field-control">
+                <label className="field-control approval-datetime-field">
                   <span>Date of Approval</span>
                   <input
-                    type="date"
+                    type="text"
                     value={dateOfApproval}
                     readOnly
                   />
@@ -3021,10 +4658,10 @@ function RequestDetailPanel({
 
         {errorMessage ? <p className="error-text modal-error">{errorMessage}</p> : null}
 
-        <div className="modal-footer">
+        <div className="modal-footer detail-action-footer">
           {canEdit ? (
             <button
-              className="primary-button"
+              className="primary-button detail-action-button detail-action-edit"
               type="button"
               onClick={onEdit}
             >
@@ -3034,7 +4671,7 @@ function RequestDetailPanel({
           ) : null}
           {canForward ? (
             <button
-              className="primary-button"
+              className="primary-button detail-action-button detail-action-forward"
               type="button"
               onClick={() => onForward(managerNotes)}
               disabled={actionDisabled}
@@ -3045,7 +4682,7 @@ function RequestDetailPanel({
           ) : null}
           {canReturn ? (
             <button
-              className="secondary-button"
+              className="secondary-button detail-action-button detail-action-return"
               type="button"
               onClick={() => onReturn(managerNotes)}
               disabled={actionDisabled}
@@ -3056,9 +4693,9 @@ function RequestDetailPanel({
           ) : null}
           {canApprove ? (
             <button
-              className="primary-button"
+              className="primary-button detail-action-button detail-action-approve"
               type="button"
-              onClick={() => onApprove(reviewAndRecommendations, dateOfApproval, loanAmountApproved, additionalRequirements)}
+              onClick={() => onApprove(reviewAndRecommendations, loanAmountApproved, additionalRequirements)}
               disabled={actionDisabled}
             >
               <CheckCircle2 size={16} aria-hidden="true" />
@@ -3067,7 +4704,7 @@ function RequestDetailPanel({
           ) : null}
           {canDisapprove ? (
             <button
-              className="secondary-button"
+              className="secondary-button detail-action-button detail-action-disapprove"
               type="button"
               onClick={() => onDisapprove(reviewAndRecommendations, additionalRequirements)}
               disabled={actionDisabled}
@@ -3078,7 +4715,7 @@ function RequestDetailPanel({
           ) : null}
           {canReturnToManager ? (
             <button
-              className="secondary-button"
+              className="secondary-button detail-action-button detail-action-return-manager"
               type="button"
               onClick={() => onReturnToManager(approverNotes)}
               disabled={actionDisabled}
@@ -3089,7 +4726,7 @@ function RequestDetailPanel({
           ) : null}
           {canPrint ? (
             <button
-              className="primary-button"
+              className="primary-button detail-action-button detail-action-print"
               type="button"
               onClick={() => window.print()}
             >
@@ -3098,7 +4735,7 @@ function RequestDetailPanel({
             </button>
           ) : null}
           <button
-            className="secondary-button"
+            className="secondary-button detail-action-button detail-action-close"
             type="button"
             onClick={onClose}
           >
@@ -3558,6 +5195,53 @@ function DetailTable({
   );
 }
 
+function AttachmentDetailList({
+  attachments,
+}: {
+  attachments: LoanAttachment[];
+}) {
+  const [message, setMessage] = useState('');
+  const [previewingId, setPreviewingId] = useState('');
+
+  const handlePreview = async (attachment: LoanAttachment) => {
+    setMessage('');
+    setPreviewingId(attachment.id);
+
+    try {
+      const blob = await getAttachmentPreviewBlob(attachment.id);
+      openPreviewBlob(blob);
+    } catch (error) {
+      setMessage(getErrorMessage(error));
+    } finally {
+      setPreviewingId('');
+    }
+  };
+
+  return (
+    <section className="detail-section">
+      <h4>Attachments</h4>
+      <div className="attachment-detail-list">
+        {attachments.map((attachment) => (
+          <div className="attachment-detail-row" key={attachment.id}>
+            <span>{attachment.attachmentType || '-'}</span>
+            <strong>{attachment.originalFilename || 'Attachment'}</strong>
+            <span>{formatFileSize(attachment.size)}</span>
+            <button
+              className="icon-action"
+              type="button"
+              onClick={() => void handlePreview(attachment)}
+            >
+              <Eye size={16} aria-hidden="true" />
+              {previewingId === attachment.id ? 'Opening' : 'Preview'}
+            </button>
+          </div>
+        ))}
+      </div>
+      {message ? <p className="error-text">{message}</p> : null}
+    </section>
+  );
+}
+
 function renderDetailValue(value: ReactNode) {
   if (typeof value === 'string') {
     return value.trim() || '-';
@@ -3590,7 +5274,7 @@ function ConnectionNotice({
   compact = false,
 }: {
   activeStatus: StatusCopy;
-  connectionState: AppsScriptConnectionState;
+  connectionState: BackendConnectionState;
   compact?: boolean;
 }) {
   const Icon = connectionState === 'connected' ? CheckCircle2 : AlertTriangle;
@@ -3627,7 +5311,7 @@ function useLoanRequests(
     const loadRequests = async () => {
       setRequestError('');
 
-      if (!hasGoogleAppsScriptUrl) {
+      if (!hasLaravelApiUrl) {
         setRequests([]);
         setSheetConfigured(false);
         return;
@@ -3993,6 +5677,25 @@ function createEmptySecurity(): NewSecurity {
   };
 }
 
+function createEmptyAttachmentRow(): AttachmentFormRow {
+  return {
+    rowId: createClientRowId(),
+    attachmentType: '',
+    originalFilename: '',
+    mimeType: '',
+    size: '',
+    uploadedAt: '',
+  };
+}
+
+function createClientRowId() {
+  if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) {
+    return crypto.randomUUID();
+  }
+
+  return `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
 function createRequestFromSummary(summary: LoanRequest): NewLoanRequest {
   const request = createEmptyLoanRequest();
 
@@ -4036,7 +5739,7 @@ function normalizeOtherLoansForForm(rows: NewOtherLoan[] = []): NewOtherLoan[] {
       loan_type: String(row.loan_type || ''),
       loan_amount: String(row.loan_amount || ''),
       balance: String(row.balance || ''),
-      status: String(row.status || ''),
+      status: normalizeLoanRelationshipStatus(row.status),
       analysis: String(row.analysis || ''),
     }))
     .filter(hasAnyValue);
@@ -4051,7 +5754,7 @@ function normalizeComakersForForm(rows: NewComaker[] = []): NewComaker[] {
       loan_type: String(row.loan_type || ''),
       loan_amount: String(row.loan_amount || ''),
       loan_balance: String(row.loan_balance || ''),
-      status: String(row.status || ''),
+      status: normalizeLoanRelationshipStatus(row.status),
     }))
     .filter(hasAnyValue);
 
@@ -4070,8 +5773,58 @@ function normalizeSecuritiesForForm(rows: NewSecurity[] = []): NewSecurity[] {
   return normalized.length ? normalized : [createEmptySecurity()];
 }
 
+function normalizeAttachmentsForForm(rows: LoanAttachment[] = []): AttachmentFormRow[] {
+  const normalized = rows
+    .map((row) => ({
+      rowId: createClientRowId(),
+      id: row.id,
+      attachmentType: row.attachmentType,
+      originalFilename: row.originalFilename,
+      mimeType: row.mimeType,
+      size: row.size,
+      uploadedAt: row.uploadedAt,
+    }))
+    .filter((row) => row.id || row.originalFilename || row.attachmentType);
+
+  return normalized.length ? normalized : [createEmptyAttachmentRow()];
+}
+
 function hasAnyValue(record: Record<string, string>) {
   return Object.values(record).some((value) => value.trim().length > 0);
+}
+
+function normalizeLoanRelationshipStatus(value: unknown) {
+  const normalized = String(value || '').trim().toUpperCase();
+
+  if (normalized === 'PAST DUE' || normalized === 'PASTDUE' || normalized === 'PAST_DUE') {
+    return 'PAST DUE';
+  }
+
+  return normalized === 'CURRENT' ? 'CURRENT' : '';
+}
+
+function formatFileSize(value?: string) {
+  const size = Number(value || 0);
+
+  if (!Number.isFinite(size) || size <= 0) {
+    return '-';
+  }
+
+  if (size < 1024) {
+    return `${size} B`;
+  }
+
+  if (size < 1024 * 1024) {
+    return `${(size / 1024).toFixed(1)} KB`;
+  }
+
+  return `${(size / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function openPreviewBlob(blob: Blob) {
+  const previewUrl = URL.createObjectURL(blob);
+  window.open(previewUrl, '_blank', 'noopener,noreferrer');
+  window.setTimeout(() => URL.revokeObjectURL(previewUrl), 60000);
 }
 
 function toDateInputValue(value: string) {
@@ -4095,6 +5848,17 @@ function toDateInputValue(value: string) {
   const day = String(parsed.getDate()).padStart(2, '0');
 
   return `${parsed.getFullYear()}-${month}-${day}`;
+}
+
+function formatDateTimeForDisplay(value: Date) {
+  const month = String(value.getMonth() + 1).padStart(2, '0');
+  const day = String(value.getDate()).padStart(2, '0');
+  const year = value.getFullYear();
+  const hours = String(value.getHours()).padStart(2, '0');
+  const minutes = String(value.getMinutes()).padStart(2, '0');
+  const seconds = String(value.getSeconds()).padStart(2, '0');
+
+  return `${month}/${day}/${year} ${hours}:${minutes}:${seconds}`;
 }
 
 function getToday() {
@@ -4121,8 +5885,8 @@ const saveStoredUser = (user: AuthenticatedUser) => {
 };
 
 const getErrorMessage = (error: unknown) => {
-  if (error instanceof AppsScriptConfigurationError) {
-    return 'Add VITE_GOOGLE_APPS_SCRIPT_WEB_APP_URL in .env.local after deployment.';
+  if (error instanceof LaravelConfigurationError) {
+    return 'Set VITE_LARAVEL_API_URL in .env.local.';
   }
 
   if (error instanceof Error) {
