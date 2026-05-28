@@ -1,7 +1,9 @@
 # syntax=docker/dockerfile:1
 
-FROM composer:2 AS backend-deps
+FROM php:8.2-cli AS backend-deps
 WORKDIR /app
+
+COPY --from=composer:2 /usr/bin/composer /usr/bin/composer
 
 COPY backend/composer.json backend/composer.lock ./
 RUN composer install \
@@ -24,7 +26,7 @@ RUN npm ci
 COPY frontend/ ./
 RUN npm run build
 
-FROM php:8.3-apache AS runtime
+FROM php:8.2-apache AS runtime
 WORKDIR /var/www/html
 
 RUN apt-get update \
