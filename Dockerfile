@@ -48,9 +48,8 @@ COPY backend/ ./
 COPY --from=backend-deps /app/vendor ./vendor
 COPY --from=frontend-build /app/dist ./public
 
-RUN rm -f bootstrap/cache/*.php \
-    && php artisan package:discover --ansi \
-    && mkdir -p \
+RUN mkdir -p \
+        bootstrap/cache \
         storage/app/private \
         storage/app/public \
         storage/framework/cache/data \
@@ -58,6 +57,8 @@ RUN rm -f bootstrap/cache/*.php \
         storage/framework/testing \
         storage/framework/views \
         storage/logs \
+    && rm -f bootstrap/cache/*.php \
+    && php artisan package:discover --ansi \
     && chown -R www-data:www-data storage bootstrap/cache
 
 EXPOSE 80
