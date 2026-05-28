@@ -1187,10 +1187,19 @@ function returnRequest_(payload) {
 
 function approveRequest_(payload) {
   const requestId = String(payload.requestId || payload.request_id || '').trim();
+  const approvalDetails = getApprovalDetails_(payload);
   const approver = getApproverIdentity_(payload);
 
   if (!requestId) {
     throw new Error('Request ID is required.');
+  }
+
+  if (!approvalDetails.reviewAndRecommendations) {
+    throw new Error('Review and recommendations are required before approving a request.');
+  }
+
+  if (!approvalDetails.loanAmountApproved) {
+    throw new Error('Loan amount approved is required before approving a request.');
   }
 
   return updateRequestStatus_(
@@ -1202,7 +1211,7 @@ function approveRequest_(payload) {
     '',
     '',
     '',
-    getApprovalDetails_(payload),
+    approvalDetails,
     approver.id,
     approver.name,
   );
@@ -1210,10 +1219,15 @@ function approveRequest_(payload) {
 
 function disapproveRequest_(payload) {
   const requestId = String(payload.requestId || payload.request_id || '').trim();
+  const notes = String(payload.notes || payload.approver_notes || '').trim();
   const approver = getApproverIdentity_(payload);
 
   if (!requestId) {
     throw new Error('Request ID is required.');
+  }
+
+  if (!notes) {
+    throw new Error('Notes are required before rejecting a request.');
   }
 
   return updateRequestStatus_(
@@ -1222,7 +1236,7 @@ function disapproveRequest_(payload) {
     '',
     ['forwarded'],
     'disapproved',
-    '',
+    notes,
     '',
     '',
     getApprovalDetails_(payload),

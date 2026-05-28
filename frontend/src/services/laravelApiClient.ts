@@ -151,6 +151,19 @@ export type SaveMemberResponse = {
   member?: Member;
 };
 
+export type ImportMemberError = {
+  row?: number;
+  cif_key?: string;
+  message: string;
+};
+
+export type ImportMembersResponse = {
+  created: number;
+  updated: number;
+  failed: number;
+  errors?: ImportMemberError[];
+};
+
 export type LoanType = {
   loan_id: string;
   loantype: string;
@@ -348,6 +361,7 @@ export type DecideLoanRequestPayload = {
   reviewAndRecommendations?: string;
   loanAmountApproved?: string;
   additionalRequirements?: string;
+  notes?: string;
 };
 
 export type ReturnToManagerPayload = {
@@ -373,6 +387,7 @@ export type DisapproveLoanRequestResponse = {
   requestId: string;
   status: 'Disapproved';
   managerNotes: string;
+  approverNotes: string;
   approverBy: string;
   approverByName: string;
   reviewAndRecommendations?: string;
@@ -415,6 +430,19 @@ export type SaveUserResponse = {
   success: boolean;
   message?: string;
   user?: AdminUser;
+};
+
+export type ImportUserError = {
+  row?: number;
+  email?: string;
+  message: string;
+};
+
+export type ImportUsersResponse = {
+  created: number;
+  updated: number;
+  failed: number;
+  errors?: ImportUserError[];
 };
 
 export type AppSettings = {
@@ -708,6 +736,29 @@ export async function deleteMember(memberId: string): Promise<SaveMemberResponse
   };
 }
 
+export async function importMembers(members: AdminMemberInput[]): Promise<ImportMembersResponse> {
+  const result = unwrap(
+    await apiCall<RawRecord>('/members/import', 'POST', {
+      members: members.map(toBackendMemberPayload),
+    }),
+  );
+
+  const errors = Array.isArray(result.errors)
+    ? result.errors.map((error: RawRecord) => ({
+        row: toNumber(asString(error.row)),
+        cif_key: asString(error.cif_key),
+        message: asString(error.message) || 'Import failed.',
+      }))
+    : [];
+
+  return {
+    created: toNumber(asString(result.created)),
+    updated: toNumber(asString(result.updated)),
+    failed: toNumber(asString(result.failed)),
+    errors,
+  };
+}
+
 export async function getLoanTypes(): Promise<GetLoanTypesResponse> {
   if (loanTypeCache) {
     return { loanTypes: loanTypeCache };
@@ -897,12 +948,14 @@ export async function disapproveLoanRequest(
     approver_name: payload.approverByName,
     review_and_recommendations: payload.reviewAndRecommendations,
     additional_requirements: payload.additionalRequirements,
+    approver_notes: payload.notes,
   });
 
   return {
     requestId: request.requestId,
     status: 'Disapproved',
     managerNotes: request.managerNotes,
+    approverNotes: request.approverNotes,
     approverBy: request.approverBy,
     approverByName: request.approverByName,
     reviewAndRecommendations: request.reviewAndRecommendations,
@@ -944,19 +997,7 @@ export async function listUsers(): Promise<ListUsersResponse> {
 }
 
 export async function saveUser(user: AdminUserInput): Promise<SaveUserResponse> {
-  const body: RawRecord = {
-    email: user.email,
-    role: user.role === 'branch_manager' ? 'manager' : user.role,
-    fullname: user.fullname,
-    position: user.position,
-    branch_id: toNullableNumber(user.branchid),
-    first_login: user.firstLogin,
-    status: normalizeUserStatus(user.status),
-  };
-
-  if (user.password?.trim()) {
-    body.password = user.password.trim();
-  }
+  const body = toBackendUserPayload(user);
 
   if (user.isNew) {
     const result = await apiCall<RawRecord>('/users', 'POST', body);
@@ -986,6 +1027,29 @@ export async function saveUser(user: AdminUserInput): Promise<SaveUserResponse> 
     success: true,
     message: result.message || 'User updated successfully.',
     user: mapUser(unwrap(result)),
+  };
+}
+
+export async function importUsers(users: AdminUserInput[]): Promise<ImportUsersResponse> {
+  const result = unwrap(
+    await apiCall<RawRecord>('/users/import', 'POST', {
+      users: users.map(toBackendUserPayload),
+    }),
+  );
+
+  const errors = Array.isArray(result.errors)
+    ? result.errors.map((error: RawRecord) => ({
+        row: toNumber(asString(error.row)),
+        email: asString(error.email),
+        message: asString(error.message) || 'Import failed.',
+      }))
+    : [];
+
+  return {
+    created: toNumber(asString(result.created)),
+    updated: toNumber(asString(result.updated)),
+    failed: toNumber(asString(result.failed)),
+    errors,
   };
 }
 
@@ -1294,6 +1358,24 @@ function toBackendMemberPayload(member: Partial<Member>): RawRecord {
     occupation: asString(member.occupation) || null,
     educational_attainment: asString(member.educational_attainment) || null,
   };
+}
+
+function toBackendUserPayload(user: AdminUserInput): RawRecord {
+  const body: RawRecord = {
+    email: asString(user.email).trim(),
+    role: user.role === 'branch_manager' ? 'manager' : asString(user.role).trim(),
+    fullname: asString(user.fullname).trim(),
+    position: asString(user.position).trim() || null,
+    branch_id: asString(user.branchid).trim() || null,
+    first_login: user.firstLogin,
+    status: normalizeUserStatus(user.status),
+  };
+
+  if (user.password?.trim()) {
+    body.password = user.password.trim();
+  }
+
+  return body;
 }
 
 function mapUser(raw: RawRecord): AdminUser {

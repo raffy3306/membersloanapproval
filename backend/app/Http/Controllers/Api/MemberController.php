@@ -6,6 +6,7 @@ use App\Models\Branch;
 use App\Models\Member;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Schema;
+use Illuminate\Support\Facades\Validator;
 use Illuminate\Validation\Rule;
 use Illuminate\Validation\ValidationException;
 
@@ -73,6 +74,52 @@ class MemberController extends BaseController
         return $this->success($member->load('branch'), 'Member created successfully', 201);
     }
 
+    public function import(Request $request)
+    {
+        $payload = $request->validate([
+            'members' => ['required', 'array', 'min:1', 'max:1000'],
+            'members.*' => ['required', 'array'],
+        ]);
+
+        $created = 0;
+        $updated = 0;
+        $failed = 0;
+        $errors = [];
+
+        foreach ($payload['members'] as $index => $memberInput) {
+            try {
+                $validated = Validator::make($memberInput, $this->validationRules([
+                    'cif_key' => ['required', 'string', 'max:255'],
+                    'client_name' => ['required_without:fullname', 'nullable', 'string', 'max:255'],
+                    'fullname' => ['required_without:client_name', 'nullable', 'string', 'max:255'],
+                ]))->validate();
+
+                $member = Member::where('cif_key', $validated['cif_key'])->first();
+
+                if ($member) {
+                    $member->update($this->toMemberData($validated));
+                    $updated++;
+                } else {
+                    Member::create($this->toMemberData($validated, true));
+                    $created++;
+                }
+            } catch (ValidationException $exception) {
+                $failed++;
+                $this->appendImportError($errors, $index, $memberInput, $exception->validator->errors()->first());
+            } catch (\Throwable $exception) {
+                $failed++;
+                $this->appendImportError($errors, $index, $memberInput, $exception->getMessage());
+            }
+        }
+
+        return $this->success([
+            'created' => $created,
+            'updated' => $updated,
+            'failed' => $failed,
+            'errors' => $errors,
+        ], "Import finished: {$created} added, {$updated} updated" . ($failed ? ", {$failed} failed." : '.'));
+    }
+
     public function update(Request $request, $id)
     {
         $member = $this->findMember($id);
@@ -116,6 +163,19 @@ class MemberController extends BaseController
         return Member::where('id', $id)
             ->orWhere('cif_key', $id)
             ->first();
+    }
+
+    private function appendImportError(array &$errors, int $index, array $memberInput, string $message): void
+    {
+        if (count($errors) >= 10) {
+            return;
+        }
+
+        $errors[] = [
+            'row' => $index + 1,
+            'cif_key' => $memberInput['cif_key'] ?? null,
+            'message' => $message,
+        ];
     }
 
     private function validationRules(array $overrides = []): array
@@ -250,6 +310,17 @@ class MemberController extends BaseController
 
         $branch = Branch::where('branch_code', $branchValue)->first()
             ?? Branch::where('branch_name', $branchValue)->first();
+
+        if (!$branch && ctype_digit($branchValue)) {
+            $unpaddedBranchValue = (string) (int) $branchValue;
+            $branchCodeCandidates = array_values(array_unique([
+                $unpaddedBranchValue,
+                'BR' . $branchValue,
+                'BR' . $unpaddedBranchValue,
+            ]));
+
+            $branch = Branch::whereIn('branch_code', $branchCodeCandidates)->first();
+        }
 
         if (!$branch && ctype_digit($branchValue) && (string) (int) $branchValue === $branchValue) {
             $branch = Branch::find((int) $branchValue);

@@ -191,6 +191,19 @@ class LoanRequestController extends BaseController
             'securities' => 'nullable|array',
         ]);
 
+        if (($validated['status'] ?? null) === 'Approved') {
+            if (trim((string) ($validated['review_and_recommendations'] ?? '')) === '') {
+                return $this->error('Review and recommendations are required before approving a request.', 422);
+            }
+
+            if (
+                !array_key_exists('loan_amount_approved', $validated) ||
+                trim((string) $validated['loan_amount_approved']) === ''
+            ) {
+                return $this->error('Loan amount approved is required before approving a request.', 422);
+            }
+        }
+
         $updateData = collect($validated)->except([
             'cif_key',
             'share_capital',
@@ -220,7 +233,7 @@ class LoanRequestController extends BaseController
             }
 
             // Set approver_id when the approver acts on a request.
-            if ($user->role === 'approver' && in_array($validated['status'], ['Approved', 'Disapproved', 'Returned to Manager'])) {
+            if ($user->role === 'approver' && in_array($validated['status'], ['Approved', 'Disapproved', 'Rejected', 'Returned to Manager'])) {
                 $updateData['approver_id'] = $user->id;
             }
         }

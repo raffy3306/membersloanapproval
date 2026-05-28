@@ -1996,6 +1996,36 @@ button {
   font-size: 0.8rem;
 }
 
+.action-notes-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 18px;
+  background: rgba(0, 0, 0, 0.46);
+}
+
+.action-notes-modal {
+  width: min(560px, 100%);
+  max-height: calc(100vh - 36px);
+}
+
+.action-notes-content {
+  display: grid;
+  gap: 12px;
+}
+
+.action-notes-content textarea {
+  min-height: 150px;
+}
+
+.action-notes-footer .primary-button,
+.action-notes-footer .secondary-button {
+  width: auto;
+}
+
 .approval-datetime-field input[readonly] {
   background: var(--brand-page);
   color: var(--brand-text);

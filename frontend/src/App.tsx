@@ -76,6 +76,8 @@ import {
   getComakerLoans,
   getLoanTypes,
   getSettings,
+  importMembers,
+  importUsers,
   listMembers,
   listAuditLogs,
   listLoanRequests,
@@ -113,6 +115,52 @@ const memberCsvHeaders: Array<keyof Member> = [
   'occupation',
   'educational_attainment',
 ];
+const memberImportBatchSize = 500;
+const userImportBatchSize = 500;
+
+type MemberImportField = keyof Member | 'first_name' | 'last_name';
+type MemberImportRow = Partial<Member> & {
+  first_name?: string;
+  last_name?: string;
+};
+type UserImportField = keyof AdminUserInput | 'isActive';
+type UserImportRow = Partial<AdminUserInput> & {
+  isActive?: string;
+};
+
+const sqlImportFallbackColumns = [
+  'id',
+  'cif_key',
+  'client_name',
+  'membership_date',
+  'membership_type',
+  'sex',
+  'age',
+  'birthdate',
+  'contactnumber',
+  'address',
+  'branch_id',
+  'status',
+  'tin_number',
+  'occupation',
+  'educational_attainment',
+];
+
+const userSqlImportFallbackColumns = [
+  'id',
+  'email',
+  'password',
+  'role',
+  'fullname',
+  'position',
+  'branchid',
+  'firstLogin',
+  'last_login_at',
+  'remember_token',
+  'created_at',
+  'updated_at',
+  'deleted_at',
+];
 
 function convertToCSV(members: Member[]): string {
   const rows = members.map(member =>
@@ -146,44 +194,47 @@ function downloadCSV(csv: string, filename: string): void {
   document.body.removeChild(link);
 }
 
-function parseCSV(csv: string): Partial<Member>[] {
-  const lines = csv.trim().split(/\r?\n/);
-  if (lines.length < 2) return [];
+function parseMemberImportFile(contents: string, fileName: string): Partial<Member>[] {
+  const trimmed = contents.trim();
 
-  const headers = parseCsvLine(lines[0]).map(normalizeMemberCsvHeader);
-  const members: Partial<Member>[] = [];
-
-  for (let i = 1; i < lines.length; i++) {
-    const row = lines[i];
-    if (!row.trim()) continue;
-
-    const values = parseCsvLine(row);
-    const member: Partial<Member> = {};
-
-    headers.forEach((header, index) => {
-      const value = values[index] || '';
-
-      if (header && value) {
-        member[header] = value;
-      }
-    });
-
-    if (member.cif_key) {
-      members.push(member);
-    }
+  if (!trimmed) {
+    return [];
   }
 
-  return members;
+  if (/\.sql$/i.test(fileName) || /^\s*INSERT\s+INTO\b/i.test(trimmed)) {
+    return parseMemberSql(trimmed);
+  }
+
+  return parseCSV(trimmed);
 }
 
-function parseCsvLine(row: string): string[] {
-  const values: string[] = [];
+function parseCSV(csv: string): Partial<Member>[] {
+  const records = parseCsvRecords(csv);
+  const headerIndex = records.findIndex(isMemberCsvHeaderRecord);
+
+  if (headerIndex === -1) {
+    return [];
+  }
+
+  const rawHeaders = records[headerIndex];
+  const headers = rawHeaders.map(normalizeMemberImportHeader);
+
+  return records
+    .slice(headerIndex + 1)
+    .filter((record) => record.some((value) => value.trim()))
+    .map((record) => mapImportRecord(headers, record))
+    .filter((member) => Boolean(member.cif_key));
+}
+
+function parseCsvRecords(csv: string): string[][] {
+  const records: string[][] = [];
+  let record: string[] = [];
   let current = '';
   let inQuotes = false;
 
-  for (let j = 0; j < row.length; j++) {
-    const char = row[j];
-    const nextChar = row[j + 1];
+  for (let j = 0; j < csv.length; j++) {
+    const char = csv[j];
+    const nextChar = csv[j + 1];
 
     if (char === '"') {
       if (inQuotes && nextChar === '"') {
@@ -193,47 +244,522 @@ function parseCsvLine(row: string): string[] {
         inQuotes = !inQuotes;
       }
     } else if (char === ',' && !inQuotes) {
-      values.push(current.trim());
+      record.push(current.trim());
+      current = '';
+    } else if ((char === '\n' || char === '\r') && !inQuotes) {
+      record.push(current.trim());
+      records.push(record);
+      record = [];
+      current = '';
+
+      if (char === '\r' && nextChar === '\n') {
+        j++;
+      }
+    } else {
+      current += char;
+    }
+  }
+
+  if (current || record.length) {
+    record.push(current.trim());
+    records.push(record);
+  }
+
+  return records;
+}
+
+function isMemberCsvHeaderRecord(record: string[]): boolean {
+  const fields = record.map(normalizeMemberImportHeader);
+
+  return fields.includes('cif_key') && (
+    fields.includes('client_name') ||
+    fields.includes('first_name') ||
+    fields.includes('last_name')
+  );
+}
+
+function normalizeMemberImportHeader(header: string): MemberImportField | '' {
+  const normalized = header.trim().toLowerCase().replace(/[^a-z0-9]/g, '');
+  const aliases: Record<string, MemberImportField> = {
+    id: 'id',
+    cifkey: 'cif_key',
+    cif: 'cif_key',
+    memberid: 'cif_key',
+    clientname: 'client_name',
+    fullname: 'client_name',
+    name: 'client_name',
+    firstname: 'first_name',
+    lastname: 'last_name',
+    membershipdate: 'membership_date',
+    memshpdate: 'membership_date',
+    membershiptype: 'membership_type',
+    membertype: 'membership_type',
+    sex: 'sex',
+    gender: 'sex',
+    age: 'age',
+    birthdate: 'birthdate',
+    birthdate2: 'birthdate',
+    dateofbirth: 'birthdate',
+    dob: 'birthdate',
+    contactnumber: 'contactnumber',
+    contact: 'contactnumber',
+    phone: 'contactnumber',
+    address: 'address',
+    branchid: 'branch_id',
+    branch: 'branch_id',
+    location: 'branch_id',
+    status: 'status',
+    membershipstatus: 'status',
+    tin: 'tin_number',
+    tinnumber: 'tin_number',
+    sharecapital: 'share_capital',
+    dateofretirement: 'date_of_retirement',
+    occupation: 'occupation',
+    educationalattainment: 'educational_attainment',
+  };
+
+  return aliases[normalized] || '';
+}
+
+function mapImportRecord(headers: Array<MemberImportField | ''>, values: string[]): Partial<Member> {
+  const row: MemberImportRow = {};
+
+  headers.forEach((header, index) => {
+    assignImportField(row, header, values[index]);
+  });
+
+  if (!row.client_name) {
+    row.client_name = getNearbyHeaderValue(headers, values, 'client_name');
+  }
+
+  if (!row.membership_date) {
+    row.membership_date = getNearbyHeaderValue(headers, values, 'membership_date');
+  }
+
+  if (!row.client_name && (row.first_name || row.last_name)) {
+    row.client_name = [row.last_name, row.first_name]
+      .map((value) => cleanupImportValue(value || ''))
+      .filter(Boolean)
+      .join(', ');
+  }
+
+  return row;
+}
+
+function assignImportField(row: MemberImportRow, field: MemberImportField | '', value: string | undefined) {
+  if (!field) {
+    return;
+  }
+
+  const cleaned = cleanupImportValue(value);
+
+  if (!cleaned) {
+    return;
+  }
+
+  row[field] = cleaned;
+}
+
+function getNearbyHeaderValue(
+  headers: Array<MemberImportField | ''>,
+  values: string[],
+  field: MemberImportField,
+) {
+  const index = headers.indexOf(field);
+
+  if (index < 0) {
+    return '';
+  }
+
+  for (const offset of [-1, 1, -2, 2]) {
+    const nearbyIndex = index + offset;
+
+    if (nearbyIndex < 0 || nearbyIndex >= values.length || headers[nearbyIndex]) {
+      continue;
+    }
+
+    const value = cleanupImportValue(values[nearbyIndex]);
+
+    if (value) {
+      return value;
+    }
+  }
+
+  return '';
+}
+
+function cleanupImportValue(value: string | undefined) {
+  const trimmed = String(value || '').trim();
+
+  if (!trimmed || /^null$/i.test(trimmed) || trimmed === "'") {
+    return '';
+  }
+
+  return trimmed;
+}
+
+function parseMemberSql(sql: string): Partial<Member>[] {
+  const members: Partial<Member>[] = [];
+  const insertPattern = /INSERT\s+INTO\s+`?members`?\s*(?:\(([^)]*)\))?\s*VALUES\s*(.+?);/gis;
+  let match: RegExpExecArray | null;
+
+  while ((match = insertPattern.exec(sql)) !== null) {
+    const columns = match[1]
+      ? parseSqlColumns(match[1])
+      : sqlImportFallbackColumns;
+    const headers = columns.map(normalizeMemberImportHeader);
+    const tuples = parseSqlTuples(match[2]);
+
+    tuples.forEach((tuple) => {
+      const member = mapImportRecord(headers, parseSqlTupleValues(tuple));
+
+      if (member.cif_key) {
+        members.push(member);
+      }
+    });
+  }
+
+  return members;
+}
+
+function parseSqlColumns(columns: string) {
+  return columns
+    .split(',')
+    .map((column) => column.replace(/[`"']/g, '').trim());
+}
+
+function parseSqlTuples(valuesSql: string) {
+  const tuples: string[] = [];
+  let current = '';
+  let depth = 0;
+  let inString = false;
+
+  for (let index = 0; index < valuesSql.length; index++) {
+    const char = valuesSql[index];
+    const nextChar = valuesSql[index + 1];
+
+    if (char === '\\' && inString) {
+      current += char + (nextChar || '');
+      index++;
+      continue;
+    }
+
+    if (char === "'") {
+      if (inString && nextChar === "'") {
+        current += "''";
+        index++;
+        continue;
+      }
+
+      inString = !inString;
+      current += char;
+      continue;
+    }
+
+    if (!inString && char === '(') {
+      if (depth > 0) {
+        current += char;
+      }
+
+      depth++;
+      continue;
+    }
+
+    if (!inString && char === ')') {
+      depth--;
+
+      if (depth === 0) {
+        tuples.push(current);
+        current = '';
+      } else {
+        current += char;
+      }
+
+      continue;
+    }
+
+    if (depth > 0) {
+      current += char;
+    }
+  }
+
+  return tuples;
+}
+
+function parseSqlTupleValues(tuple: string) {
+  const values: string[] = [];
+  let current = '';
+  let inString = false;
+
+  for (let index = 0; index < tuple.length; index++) {
+    const char = tuple[index];
+    const nextChar = tuple[index + 1];
+
+    if (char === '\\' && inString) {
+      current += char + (nextChar || '');
+      index++;
+      continue;
+    }
+
+    if (char === "'") {
+      if (inString && nextChar === "'") {
+        current += "''";
+        index++;
+        continue;
+      }
+
+      inString = !inString;
+      current += char;
+      continue;
+    }
+
+    if (char === ',' && !inString) {
+      values.push(parseSqlValue(current));
       current = '';
     } else {
       current += char;
     }
   }
 
-  values.push(current.trim());
+  values.push(parseSqlValue(current));
   return values;
 }
 
-function normalizeMemberCsvHeader(header: string): keyof Member | '' {
+function parseSqlValue(value: string) {
+  const trimmed = value.trim();
+
+  if (/^null$/i.test(trimmed)) {
+    return '';
+  }
+
+  if (trimmed.startsWith("'") && trimmed.endsWith("'")) {
+    return trimmed
+      .slice(1, -1)
+      .replace(/\\'/g, "'")
+      .replace(/''/g, "'")
+      .replace(/\\\\/g, '\\');
+  }
+
+  return trimmed;
+}
+
+function parseUserImportFile(contents: string, fileName: string): Partial<AdminUserInput>[] {
+  const trimmed = contents.trim();
+
+  if (!trimmed) {
+    return [];
+  }
+
+  if (/\.sql$/i.test(fileName) || /^\s*(?:--.*\r?\n|\s)*INSERT\s+INTO\b/i.test(trimmed)) {
+    return parseUserSql(trimmed);
+  }
+
+  return parseUserCSV(trimmed);
+}
+
+function parseUserCSV(csv: string): Partial<AdminUserInput>[] {
+  const records = parseCsvRecords(csv);
+  const headerIndex = records.findIndex(isUserCsvHeaderRecord);
+
+  if (headerIndex === -1) {
+    return [];
+  }
+
+  const headers = records[headerIndex].map(normalizeUserImportHeader);
+
+  return records
+    .slice(headerIndex + 1)
+    .filter((record) => record.some((value) => value.trim()))
+    .map((record) => mapUserImportRecord(headers, record))
+    .filter((user) => Boolean(user.email));
+}
+
+function isUserCsvHeaderRecord(record: string[]): boolean {
+  const fields = record.map(normalizeUserImportHeader);
+
+  return fields.includes('email') && (
+    fields.includes('fullname') ||
+    fields.includes('role') ||
+    fields.includes('password')
+  );
+}
+
+function normalizeUserImportHeader(header: string): UserImportField | '' {
   const normalized = header.trim().toLowerCase().replace(/[^a-z0-9]/g, '');
-  const aliases: Record<string, keyof Member> = {
-    id: 'id',
-    cifkey: 'cif_key',
-    cif: 'cif_key',
-    clientname: 'client_name',
-    fullname: 'client_name',
-    name: 'client_name',
-    membershipdate: 'membership_date',
-    membershiptype: 'membership_type',
-    membertype: 'membership_type',
-    sex: 'sex',
-    age: 'age',
-    birthdate: 'birthdate',
-    birthdate2: 'birthdate',
-    dateofbirth: 'birthdate',
-    contactnumber: 'contactnumber',
-    contact: 'contactnumber',
-    address: 'address',
-    branchid: 'branch_id',
-    branch: 'branch_id',
+  const aliases: Record<string, UserImportField> = {
+    email: 'email',
+    user: 'email',
+    username: 'email',
+    password: 'password',
+    pass: 'password',
+    role: 'role',
+    userrole: 'role',
+    fullname: 'fullname',
+    fullName: 'fullname',
+    full: 'fullname',
+    name: 'fullname',
+    position: 'position',
+    designation: 'position',
+    jobtitle: 'position',
+    branchid: 'branchid',
+    branch: 'branchid',
+    branchcode: 'branchid',
+    branchname: 'branchid',
+    branchid2: 'branchid',
+    firstlogin: 'firstLogin',
+    firstlogin2: 'firstLogin',
+    isfirstlogin: 'firstLogin',
+    mustchangepassword: 'firstLogin',
+    firstloginrequired: 'firstLogin',
     status: 'status',
-    tin: 'tin_number',
-    tinnumber: 'tin_number',
-    occupation: 'occupation',
-    educationalattainment: 'educational_attainment',
+    isactive: 'isActive',
+    active: 'isActive',
   };
 
+  if (normalized === 'branchid' || normalized === 'branch_id') {
+    return 'branchid';
+  }
+
+  if (normalized === 'firstlogin' || normalized === 'first_login') {
+    return 'firstLogin';
+  }
+
   return aliases[normalized] || '';
+}
+
+function mapUserImportRecord(
+  headers: Array<UserImportField | ''>,
+  values: string[],
+): Partial<AdminUserInput> {
+  const row: UserImportRow = {};
+
+  headers.forEach((header, index) => {
+    assignUserImportField(row, header, values[index]);
+  });
+
+  if (!row.status && typeof row.isActive !== 'undefined') {
+    row.status = normalizeImportedActiveStatus(row.isActive);
+  }
+
+  return row;
+}
+
+function assignUserImportField(
+  row: UserImportRow,
+  field: UserImportField | '',
+  value: string | undefined,
+) {
+  if (!field) {
+    return;
+  }
+
+  const cleaned = cleanupImportValue(value);
+
+  if (!cleaned) {
+    return;
+  }
+
+  row[field] = cleaned as never;
+}
+
+function parseUserSql(sql: string): Partial<AdminUserInput>[] {
+  const users: Partial<AdminUserInput>[] = [];
+  const insertPattern = /INSERT\s+INTO\s+`?users`?\s*(?:\(([^)]*)\))?\s*VALUES\s*(.+?);/gis;
+  let match: RegExpExecArray | null;
+
+  while ((match = insertPattern.exec(sql)) !== null) {
+    const columns = match[1]
+      ? parseSqlColumns(match[1])
+      : userSqlImportFallbackColumns;
+    const headers = columns.map(normalizeUserImportHeader);
+    const tuples = parseSqlTuples(match[2]);
+
+    tuples.forEach((tuple) => {
+      const user = mapUserImportRecord(headers, parseSqlTupleValues(tuple));
+
+      if (user.email) {
+        users.push(user);
+      }
+    });
+  }
+
+  return users;
+}
+
+function normalizeImportedUser(user: Partial<AdminUserInput>): AdminUserInput {
+  return {
+    email: String(user.email || '').trim().toLowerCase(),
+    password: String(user.password || '').trim(),
+    role: normalizeImportedUserRole(user.role, user.position),
+    fullname: String(user.fullname || '').trim(),
+    position: String(user.position || '').trim(),
+    branchid: String(user.branchid || '').trim(),
+    firstLogin: normalizeImportedBoolean(user.firstLogin, true),
+    status: normalizeImportedUserStatus(user.status),
+  };
+}
+
+function normalizeImportedUserRole(role: unknown, position: unknown) {
+  const rawRole = String(role || '').trim();
+  const profile = `${rawRole} ${String(position || '')}`.toLowerCase().replace(/[^a-z0-9]/g, '');
+
+  if (profile.includes('admin')) {
+    return 'admin';
+  }
+
+  if (profile.includes('branchmanager') || profile.includes('manager')) {
+    return 'manager';
+  }
+
+  if (
+    profile.includes('approver') ||
+    profile.includes('checker') ||
+    profile.includes('financehead') ||
+    profile.includes('credithead') ||
+    profile.includes('savingscredithead')
+  ) {
+    return 'approver';
+  }
+
+  return 'teller';
+}
+
+function normalizeImportedUserStatus(value: unknown) {
+  const normalized = String(value || '').trim().toUpperCase();
+
+  if (normalized === '0' || normalized === 'FALSE' || normalized === 'NO' || normalized === 'INACTIVE' || normalized === 'I') {
+    return 'INACTIVE';
+  }
+
+  return 'ACTIVE';
+}
+
+function normalizeImportedActiveStatus(value: unknown) {
+  const normalized = String(value || '').trim().toUpperCase();
+
+  if (normalized === '0' || normalized === 'FALSE' || normalized === 'NO' || normalized === 'INACTIVE') {
+    return 'INACTIVE';
+  }
+
+  return 'ACTIVE';
+}
+
+function normalizeImportedBoolean(value: unknown, fallback: boolean) {
+  const normalized = String(value ?? '').trim().toUpperCase();
+
+  if (!normalized) {
+    return fallback;
+  }
+
+  if (['1', 'TRUE', 'YES', 'Y', 'ON'].includes(normalized)) {
+    return true;
+  }
+
+  if (['0', 'FALSE', 'NO', 'N', 'OFF'].includes(normalized)) {
+    return false;
+  }
+
+  return fallback;
 }
 
 type StatusCopy = {
@@ -247,6 +773,7 @@ type UserDashboardKind = DashboardKind | 'admin';
 type PageKind = 'login' | UserDashboardKind;
 type DashboardView = LoanRequestListPayload['view'];
 type AdminView = 'audit' | 'branches' | 'members' | 'users' | 'settings';
+type RequestNotesAction = 'manager-return' | 'approver-return' | 'approver-reject';
 
 type DashboardMenu = {
   id: DashboardView;
@@ -325,6 +852,43 @@ const statusCopy: Record<BackendConnectionState, StatusCopy> = {
   failed: {
     label: 'Connection Failed',
     detail: 'The backend could not be reached.',
+  },
+};
+
+const requestNotesActionCopy: Record<
+  RequestNotesAction,
+  {
+    fieldLabel: string;
+    helpText: string;
+    pendingLabel: string;
+    placeholder: string;
+    submitLabel: string;
+    title: string;
+  }
+> = {
+  'manager-return': {
+    fieldLabel: 'Manager Notes',
+    helpText: 'Visible to the teller who made this request.',
+    pendingLabel: 'Returning',
+    placeholder: 'Add return instructions for the teller...',
+    submitLabel: 'Submit Return',
+    title: 'Return to Teller',
+  },
+  'approver-return': {
+    fieldLabel: 'Approver Notes',
+    helpText: 'Visible to the branch manager and the teller who made this request.',
+    pendingLabel: 'Returning',
+    placeholder: 'Add notes for the branch manager and teller...',
+    submitLabel: 'Submit Return',
+    title: 'Return to Branch Manager',
+  },
+  'approver-reject': {
+    fieldLabel: 'Approver Notes',
+    helpText: 'Visible to the branch manager and the teller who made this request.',
+    pendingLabel: 'Rejecting',
+    placeholder: 'Add rejection notes for the branch manager and teller...',
+    submitLabel: 'Submit Rejection',
+    title: 'Reject Request',
   },
 };
 
@@ -1666,7 +2230,7 @@ function AdminMembers() {
     setIsImporting(true);
 
     try {
-      const importedMembers = parseCSV(await file.text())
+      const importedMembers = parseMemberImportFile(await file.text(), file.name)
         .map(normalizeImportedMember)
         .filter((member): member is AdminMemberInput =>
           Boolean(member.cif_key && member.client_name),
@@ -1677,35 +2241,37 @@ function AdminMembers() {
         return;
       }
 
-      const existingByCif = new Map(
-        members.map((member) => [member.cif_key.toLowerCase(), member]),
-      );
       let created = 0;
       let updated = 0;
       let failed = 0;
+      const failedRows: string[] = [];
 
-      for (const importedMember of importedMembers) {
-        const existing = existingByCif.get(importedMember.cif_key.toLowerCase());
+      for (let index = 0; index < importedMembers.length; index += memberImportBatchSize) {
+        const batch = importedMembers.slice(index, index + memberImportBatchSize);
+        const result = await importMembers(batch);
 
-        try {
-          await saveMember({
-            ...importedMember,
-            id: existing?.id,
-          });
+        created += result.created;
+        updated += result.updated;
+        failed += result.failed;
 
-          if (existing) {
-            updated++;
-          } else {
-            created++;
-          }
-        } catch {
-          failed++;
-        }
+        result.errors?.slice(0, Math.max(0, 5 - failedRows.length)).forEach((rowError) => {
+          const rowNumber = rowError.row ? rowError.row + index : index + 1;
+          failedRows.push(`row ${rowNumber}${rowError.cif_key ? ` (${rowError.cif_key})` : ''}: ${rowError.message}`);
+        });
+
+        setSuccessMessage(
+          `Importing members: ${Math.min(index + batch.length, importedMembers.length)} of ${importedMembers.length} processed.`,
+        );
       }
 
       setSuccessMessage(
         `Import finished: ${created} added, ${updated} updated${failed ? `, ${failed} failed` : ''}.`,
       );
+
+      if (failedRows.length) {
+        setErrorMessage(`Some rows were not imported: ${failedRows.join('; ')}`);
+      }
+
       setRefreshToken((value) => value + 1);
     } catch (error) {
       setErrorMessage(getErrorMessage(error));
@@ -1766,7 +2332,7 @@ function AdminMembers() {
           {isImporting ? 'Importing' : 'Import'}
           <input
             type="file"
-            accept=".csv,text/csv"
+            accept=".csv,.sql,text/csv,text/plain,application/sql"
             onChange={handleImportMembers}
             disabled={isImporting}
             hidden
@@ -2220,12 +2786,14 @@ function normalizeImportedMember(member: Partial<Member>): AdminMemberInput {
     cif_key: String(member.cif_key || '').trim(),
     client_name: String(member.client_name || '').trim(),
     membership_date: toDateInputValue(String(member.membership_date || '')),
-    membership_type: String(member.membership_type || 'Regular Member').trim(),
-    sex: String(member.sex || '').trim(),
+    membership_type: normalizeMembershipType(member.membership_type),
+    sex: normalizeImportedSex(member.sex),
     age: calculateAgeFromBirthdate(birthdate) || String(member.age || '').trim(),
     birthdate,
     contactnumber: String(member.contactnumber || '').trim(),
     address: String(member.address || '').trim(),
+    share_capital: normalizeImportedAmount(member.share_capital),
+    date_of_retirement: toDateInputValue(String(member.date_of_retirement || '')),
     branch_id: String(member.branch_id || '').trim(),
     status: normalizeMemberStatus(member.status),
     tin_number: String(member.tin_number || '').trim(),
@@ -2267,6 +2835,47 @@ function normalizeMemberStatus(value: unknown) {
   }
 
   return 'ACTIVE';
+}
+
+function normalizeImportedSex(value: unknown) {
+  const normalized = String(value || '').trim().toUpperCase();
+
+  if (normalized === 'M' || normalized === 'MALE') {
+    return 'M';
+  }
+
+  if (normalized === 'F' || normalized === 'FEMALE') {
+    return 'F';
+  }
+
+  if (normalized === 'OTHER') {
+    return 'Other';
+  }
+
+  return '';
+}
+
+function normalizeMembershipType(value: unknown) {
+  const rawValue = String(value || '').trim();
+  const normalized = rawValue.toUpperCase();
+
+  if (!normalized) {
+    return 'Regular Member';
+  }
+
+  if (normalized === 'REGULAR') {
+    return 'Regular Member';
+  }
+
+  if (normalized === 'ASSOCIATE') {
+    return 'Associate Member';
+  }
+
+  return rawValue;
+}
+
+function normalizeImportedAmount(value: unknown) {
+  return String(value || '').replace(/,/g, '').trim();
 }
 
 function calculateAgeFromBirthdate(value: string) {
@@ -2313,6 +2922,7 @@ function AdminUsers() {
   const [editingUser, setEditingUser] = useState<AdminUser | null>(null);
   const [isAdding, setIsAdding] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
+  const [isImporting, setIsImporting] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
   const [successMessage, setSuccessMessage] = useState('');
   const [refreshToken, setRefreshToken] = useState(0);
@@ -2358,6 +2968,67 @@ function AdminUsers() {
     setRefreshToken((value) => value + 1);
   };
 
+  const handleImportUsers = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+
+    if (!file) {
+      return;
+    }
+
+    setErrorMessage('');
+    setSuccessMessage('');
+    setIsImporting(true);
+
+    try {
+      const importedUsers = parseUserImportFile(await file.text(), file.name)
+        .map(normalizeImportedUser)
+        .filter((user) => Boolean(user.email && user.fullname));
+
+      if (!importedUsers.length) {
+        setErrorMessage('No valid users found in the import file.');
+        return;
+      }
+
+      let created = 0;
+      let updated = 0;
+      let failed = 0;
+      const failedRows: string[] = [];
+
+      for (let index = 0; index < importedUsers.length; index += userImportBatchSize) {
+        const batch = importedUsers.slice(index, index + userImportBatchSize);
+        const result = await importUsers(batch);
+
+        created += result.created;
+        updated += result.updated;
+        failed += result.failed;
+
+        result.errors?.slice(0, Math.max(0, 5 - failedRows.length)).forEach((rowError) => {
+          const rowNumber = rowError.row ? rowError.row + index : index + 1;
+          failedRows.push(`row ${rowNumber}${rowError.email ? ` (${rowError.email})` : ''}: ${rowError.message}`);
+        });
+
+        setSuccessMessage(
+          `Importing users: ${Math.min(index + batch.length, importedUsers.length)} of ${importedUsers.length} processed.`,
+        );
+      }
+
+      setSuccessMessage(
+        `Import finished: ${created} added, ${updated} updated${failed ? `, ${failed} failed` : ''}.`,
+      );
+
+      if (failedRows.length) {
+        setErrorMessage(`Some rows were not imported: ${failedRows.join('; ')}`);
+      }
+
+      setRefreshToken((value) => value + 1);
+    } catch (error) {
+      setErrorMessage(getErrorMessage(error));
+    } finally {
+      setIsImporting(false);
+      event.currentTarget.value = '';
+    }
+  };
+
   return (
     <div className="admin-stack">
       <div className="panel-actions">
@@ -2373,6 +3044,17 @@ function AdminUsers() {
           <Plus size={17} aria-hidden="true" />
           Add User
         </button>
+        <label className={`secondary-button inline-button ${isImporting ? 'disabled-label' : ''}`}>
+          <Upload size={17} aria-hidden="true" />
+          {isImporting ? 'Importing' : 'Import'}
+          <input
+            type="file"
+            accept=".csv,.sql,text/csv,text/plain,application/sql"
+            onChange={handleImportUsers}
+            disabled={isImporting}
+            hidden
+          />
+        </label>
         <span className="count-chip">{isLoading ? 'Loading' : `${users.length} users`}</span>
       </div>
 
@@ -2933,6 +3615,16 @@ function Dashboard({
       return;
     }
 
+    if (!String(reviewAndRecommendations || '').trim()) {
+      setRequestActionError('Review and recommendations are required before approving a request.');
+      return;
+    }
+
+    if (!String(loanAmountApproved || '').trim()) {
+      setRequestActionError('Loan amount approved is required before approving a request.');
+      return;
+    }
+
     setRequestAction({
       requestId: request.requestId,
       type: 'approve',
@@ -2959,12 +3651,18 @@ function Dashboard({
   const handleDisapproveRequest = async (
     request: LoanRequest,
     reviewAndRecommendations?: string,
-    additionalRequirements?: string
+    additionalRequirements?: string,
+    approverNotes?: string
   ) => {
     setRequestActionError('');
 
     if (!request.requestId) {
       setRequestActionError('Unable to disapprove request: request ID is missing.');
+      return;
+    }
+
+    if (!String(approverNotes || '').trim()) {
+      setRequestActionError('Notes are required before rejecting a request.');
       return;
     }
 
@@ -2980,6 +3678,7 @@ function Dashboard({
         approverByName: user.fullname || user.email,
         reviewAndRecommendations,
         additionalRequirements,
+        notes: approverNotes,
       });
       setViewedRequest(null);
       setRefreshToken((value) => value + 1);
@@ -3187,8 +3886,8 @@ function Dashboard({
             onApprove={(reviewAndRecommendations, loanAmountApproved, additionalRequirements) =>
               void handleApproveRequest(viewedRequest, reviewAndRecommendations, loanAmountApproved, additionalRequirements)
             }
-            onDisapprove={(reviewAndRecommendations, additionalRequirements) =>
-              void handleDisapproveRequest(viewedRequest, reviewAndRecommendations, additionalRequirements)
+            onDisapprove={(reviewAndRecommendations, additionalRequirements, approverNotes) =>
+              void handleDisapproveRequest(viewedRequest, reviewAndRecommendations, additionalRequirements, approverNotes)
             }
             onReturnToManager={(notes) =>
               void handleReturnToManager(viewedRequest, notes)
@@ -4251,7 +4950,7 @@ function RequestDetailPanel({
   request: LoanRequest;
   onClose: () => void;
   onApprove: (reviewAndRecommendations?: string, loanAmountApproved?: string, additionalRequirements?: string) => void;
-  onDisapprove: (reviewAndRecommendations?: string, additionalRequirements?: string) => void;
+  onDisapprove: (reviewAndRecommendations?: string, additionalRequirements?: string, approverNotes?: string) => void;
   onEdit: () => void;
   onForward: (notes: string) => void;
   onReturn: (notes: string) => void;
@@ -4270,6 +4969,9 @@ function RequestDetailPanel({
   const [loanAmountApproved, setLoanAmountApproved] = useState(request.loanAmountApproved || '');
   const [additionalRequirements, setAdditionalRequirements] = useState(request.additionalRequirements || '');
   const [appSettings, setAppSettings] = useState<AppSettings>({});
+  const [notesAction, setNotesAction] = useState<RequestNotesAction | null>(null);
+  const [notesDraft, setNotesDraft] = useState('');
+  const [notesError, setNotesError] = useState('');
 
   useEffect(() => {
     let isCurrent = true;
@@ -4284,6 +4986,9 @@ function RequestDetailPanel({
       setLoanAmountApproved(request.loanAmountApproved || '');
       setAdditionalRequirements(request.additionalRequirements || '');
       setAppSettings({});
+      setNotesAction(null);
+      setNotesDraft('');
+      setNotesError('');
 
       if (!request.requestId) {
         setDetailsError('Unable to load full request details: request ID is missing.');
@@ -4339,6 +5044,7 @@ function RequestDetailPanel({
   const isReturnedToManager = normalizedStatus === 'returnedtomanager';
   const isForwarded = normalizedStatus === 'forwarded';
   const isApproved = normalizedStatus === 'approved';
+  const isRejected = normalizedStatus === 'disapproved' || normalizedStatus === 'rejected';
   const canEdit = dashboard === 'teller' && (isPending || isReturned);
   const canForward = dashboard === 'manager' && (isPending || isReturnedToManager);
   const canReturn = dashboard === 'manager' && (isPending || isReturnedToManager);
@@ -4346,8 +5052,10 @@ function RequestDetailPanel({
   const canDisapprove = dashboard === 'approver' && isForwarded;
   const canReturnToManager = dashboard === 'approver' && isForwarded;
   const canPrint = dashboard === 'teller' && isApproved;
-  const canManageNotes = canForward || canReturn;
-  const canManageApproverNotes = canReturnToManager;
+  const shouldShowManagerNotes =
+    isReturned && managerNotes.trim().length > 0;
+  const shouldShowApproverNotes =
+    (isReturnedToManager || isRejected) && approverNotes.trim().length > 0;
   const requestDetails = details?.request;
   const displayedDateOfApproval = dateOfApproval || approvalClockValue;
   const actionDisabled =
@@ -4357,9 +5065,62 @@ function RequestDetailPanel({
     isApproving ||
     isDisapproving ||
     isReturningToManager;
+  const isNotesActionSubmitting =
+    (notesAction === 'manager-return' && isReturning) ||
+    (notesAction === 'approver-return' && isReturningToManager) ||
+    (notesAction === 'approver-reject' && isDisapproving);
+  const notesActionDetails = notesAction
+    ? requestNotesActionCopy[notesAction]
+    : null;
+
+  const openNotesModal = (action: RequestNotesAction) => {
+    setNotesAction(action);
+    setNotesError('');
+    setNotesDraft(action === 'manager-return' ? managerNotes : approverNotes);
+  };
+
+  const closeNotesModal = () => {
+    if (isNotesActionSubmitting) {
+      return;
+    }
+
+    setNotesAction(null);
+    setNotesDraft('');
+    setNotesError('');
+  };
+
+  const handleNotesSubmit = () => {
+    const notes = notesDraft.trim();
+
+    if (!notes) {
+      setNotesError(
+        notesAction === 'approver-reject'
+          ? 'Notes are required before rejecting a request.'
+          : 'Notes are required before returning a request.',
+      );
+      return;
+    }
+
+    if (notesAction === 'manager-return') {
+      setManagerNotes(notes);
+      onReturn(notes);
+      return;
+    }
+
+    setApproverNotes(notes);
+
+    if (notesAction === 'approver-return') {
+      onReturnToManager(notes);
+      return;
+    }
+
+    if (notesAction === 'approver-reject') {
+      onDisapprove(reviewAndRecommendations, additionalRequirements, notes);
+    }
+  };
 
   useEffect(() => {
-    if (!canManageApproverNotes || dateOfApproval.trim()) {
+    if (!canReturnToManager || dateOfApproval.trim()) {
       return;
     }
 
@@ -4370,7 +5131,7 @@ function RequestDetailPanel({
     }, 1000);
 
     return () => window.clearInterval(intervalId);
-  }, [canManageApproverNotes, dateOfApproval]);
+  }, [canReturnToManager, dateOfApproval]);
 
   return (
     <div className="modal-overlay" onClick={onClose}>
@@ -4532,48 +5293,39 @@ function RequestDetailPanel({
             )}
           </div>
 
-          {canManageNotes || managerNotes.trim() ? (
+          {shouldShowManagerNotes ? (
             <label className="field-control manager-notes-field print-hidden">
               <span>Manager Notes</span>
               <textarea
                 value={managerNotes}
                 onChange={(event) => setManagerNotes(event.target.value)}
-                readOnly={!canManageNotes}
-                placeholder={
-                  canManageNotes
-                    ? 'Add notes or return instructions for the teller...'
-                    : ''
-                }
+                readOnly
               />
               <small>Visible to the teller who made this request.</small>
             </label>
           ) : null}
 
-          {canManageApproverNotes || approverNotes.trim() ? (
+          {shouldShowApproverNotes ? (
             <label className="field-control manager-notes-field print-hidden">
               <span>Approver Notes</span>
               <textarea
                 value={approverNotes}
                 onChange={(event) => setApproverNotes(event.target.value)}
-                readOnly={!canManageApproverNotes}
-                placeholder={
-                  canManageApproverNotes
-                    ? 'Add notes for the branch manager and teller...'
-                    : ''
-                }
+                readOnly
               />
               <small>Visible to the branch manager and the teller who made this request.</small>
             </label>
           ) : null}
 
-          {canManageApproverNotes ? (
+          {canReturnToManager ? (
             <div className="print-hidden">
               <label className="field-control manager-notes-field">
-                <span>Review and Recommendations</span>
+                <span>Review and Recommendations *</span>
                 <textarea
                   value={reviewAndRecommendations}
                   onChange={(event) => setReviewAndRecommendations(event.target.value)}
                   placeholder="Provide your review and recommendations..."
+                  required
                 />
                 <small>Your detailed review and recommendations for this loan request.</small>
               </label>
@@ -4588,12 +5340,13 @@ function RequestDetailPanel({
               </label>
 
               <label className="field-control">
-                <span>Loan Amount Approved</span>
+                <span>Loan Amount Approved *</span>
                 <input
                   type="number"
                   value={loanAmountApproved}
                   onChange={(event) => setLoanAmountApproved(event.target.value)}
                   placeholder="Enter the approved loan amount"
+                  required
                 />
               </label>
 
@@ -4609,7 +5362,7 @@ function RequestDetailPanel({
             </div>
           ) : null}
 
-          {!canManageApproverNotes && (reviewAndRecommendations.trim() || dateOfApproval.trim() || loanAmountApproved.trim() || additionalRequirements.trim()) ? (
+          {!canReturnToManager && (reviewAndRecommendations.trim() || dateOfApproval.trim() || loanAmountApproved.trim() || additionalRequirements.trim()) ? (
             <div className="print-hidden">
               {reviewAndRecommendations.trim() ? (
                 <label className="field-control manager-notes-field">
@@ -4673,7 +5426,7 @@ function RequestDetailPanel({
             <button
               className="primary-button detail-action-button detail-action-forward"
               type="button"
-              onClick={() => onForward(managerNotes)}
+              onClick={() => onForward('')}
               disabled={actionDisabled}
             >
               <Send size={16} aria-hidden="true" />
@@ -4684,7 +5437,7 @@ function RequestDetailPanel({
             <button
               className="secondary-button detail-action-button detail-action-return"
               type="button"
-              onClick={() => onReturn(managerNotes)}
+              onClick={() => openNotesModal('manager-return')}
               disabled={actionDisabled}
             >
               <RefreshCw size={16} aria-hidden="true" />
@@ -4706,18 +5459,18 @@ function RequestDetailPanel({
             <button
               className="secondary-button detail-action-button detail-action-disapprove"
               type="button"
-              onClick={() => onDisapprove(reviewAndRecommendations, additionalRequirements)}
+              onClick={() => openNotesModal('approver-reject')}
               disabled={actionDisabled}
             >
               <X size={16} aria-hidden="true" />
-              {isDisapproving ? 'Disapproving' : 'Disapproved'}
+              {isDisapproving ? 'Disapproving' : 'Disapprove'}
             </button>
           ) : null}
           {canReturnToManager ? (
             <button
               className="secondary-button detail-action-button detail-action-return-manager"
               type="button"
-              onClick={() => onReturnToManager(approverNotes)}
+              onClick={() => openNotesModal('approver-return')}
               disabled={actionDisabled}
             >
               <RefreshCw size={16} aria-hidden="true" />
@@ -4742,6 +5495,81 @@ function RequestDetailPanel({
             Close
           </button>
         </div>
+
+        {notesAction && notesActionDetails ? (
+          <div
+            className="action-notes-backdrop print-hidden"
+            onClick={closeNotesModal}
+          >
+            <div
+              className="modal-panel action-notes-modal"
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="action-notes-title"
+              onClick={(event) => event.stopPropagation()}
+            >
+              <div className="modal-header">
+                <h3 id="action-notes-title">{notesActionDetails.title}</h3>
+                <button
+                  className="icon-action"
+                  type="button"
+                  onClick={closeNotesModal}
+                  disabled={isNotesActionSubmitting}
+                  title="Close"
+                >
+                  <X size={18} aria-hidden="true" />
+                </button>
+              </div>
+              <div className="modal-content action-notes-content">
+                <label className="field-control manager-notes-field">
+                  <span>{notesActionDetails.fieldLabel}</span>
+                  <textarea
+                    autoFocus
+                    value={notesDraft}
+                    onChange={(event) => {
+                      setNotesDraft(event.target.value);
+                      setNotesError('');
+                    }}
+                    placeholder={notesActionDetails.placeholder}
+                    readOnly={isNotesActionSubmitting}
+                  />
+                  <small>{notesActionDetails.helpText}</small>
+                </label>
+                {notesError ? (
+                  <p className="error-text">{notesError}</p>
+                ) : null}
+                {errorMessage ? (
+                  <p className="error-text">{errorMessage}</p>
+                ) : null}
+              </div>
+              <div className="modal-footer action-notes-footer">
+                <button
+                  className="secondary-button"
+                  type="button"
+                  onClick={closeNotesModal}
+                  disabled={isNotesActionSubmitting}
+                >
+                  Cancel
+                </button>
+                <button
+                  className="primary-button"
+                  type="button"
+                  onClick={handleNotesSubmit}
+                  disabled={isNotesActionSubmitting}
+                >
+                  {notesAction === 'approver-reject' ? (
+                    <X size={16} aria-hidden="true" />
+                  ) : (
+                    <RefreshCw size={16} aria-hidden="true" />
+                  )}
+                  {isNotesActionSubmitting
+                    ? notesActionDetails.pendingLabel
+                    : notesActionDetails.submitLabel}
+                </button>
+              </div>
+            </div>
+          </div>
+        ) : null}
       </div>
     </div>
   );
