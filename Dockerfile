@@ -43,6 +43,7 @@ RUN apt-get update \
     && a2enmod headers rewrite
 
 COPY docker/apache.conf /etc/apache2/sites-available/000-default.conf
+COPY docker/entrypoint.sh /usr/local/bin/entrypoint.sh
 
 COPY backend/ ./
 COPY --from=backend-deps /app/vendor ./vendor
@@ -59,8 +60,10 @@ RUN mkdir -p \
         storage/logs \
     && rm -f bootstrap/cache/*.php \
     && php artisan package:discover --ansi \
+    && chmod +x /usr/local/bin/entrypoint.sh \
     && chown -R www-data:www-data storage bootstrap/cache
 
 EXPOSE 80
 
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
 CMD ["apache2-foreground"]
