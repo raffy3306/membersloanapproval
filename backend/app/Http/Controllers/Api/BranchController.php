@@ -10,15 +10,31 @@ class BranchController extends BaseController
     /**
      * Get all branches
      */
-    public function index()
+    public function index(Request $request)
     {
         try {
-            $branches = Branch::select('id', 'branch_code', 'branch_name', 'address', 'phone')
-                ->orderBy('branch_code')
-                ->get();
+            $query = Branch::select('id', 'branch_code', 'branch_name', 'address', 'phone')
+                ->orderBy('branch_code');
+
+            if (!$request->has('page') && !$request->has('per_page')) {
+                return $this->success([
+                    'branches' => $query->get(),
+                ]);
+            }
+
+            $page = max(1, (int)$request->query('page', 1));
+            $perPage = min(max(1, (int)$request->query('per_page', 15)), 100);
+            $paginated = $query->paginate($perPage, ['*'], 'page', $page);
 
             return $this->success([
-                'branches' => $branches,
+                'branches' => $paginated->items(),
+                'pagination' => [
+                    'page' => $paginated->currentPage(),
+                    'per_page' => $paginated->perPage(),
+                    'total' => $paginated->total(),
+                    'last_page' => $paginated->lastPage(),
+                    'has_more' => $paginated->hasMorePages(),
+                ],
             ]);
         } catch (\Exception $e) {
             return $this->error('Failed to fetch branches: ' . $e->getMessage(), 500);

@@ -103,6 +103,15 @@ export type LoanRequestListPayload = {
 export type LoanRequestListResponse = {
   requests: LoanRequest[];
   sheetConfigured: boolean;
+  pagination?: PaginationInfo;
+};
+
+export type PaginationInfo = {
+  page: number;
+  per_page: number;
+  total: number;
+  last_page: number;
+  has_more: boolean;
 };
 
 export type Member = {
@@ -133,11 +142,14 @@ export type SearchMembersPayload = {
 export type SearchMembersResponse = {
   members: Member[];
   sheetConfigured: boolean;
+  pagination?: PaginationInfo;
 };
 
 export type ListMembersPayload = {
   query?: string;
   limit?: number;
+  perPage?: number;
+  page?: number;
 };
 
 export type AdminMemberInput = Partial<Member> & {
@@ -184,6 +196,7 @@ export type Branch = {
 
 export type GetBranchesResponse = {
   branches: Branch[];
+  pagination?: PaginationInfo;
 };
 
 export type AdminBranchInput = Partial<Branch> & {
@@ -410,6 +423,7 @@ export type AdminUser = AuthenticatedUser & {
 };
 
 export type AdminUserInput = {
+  id?: string;
   email: string;
   password?: string;
   role: string;
@@ -424,6 +438,7 @@ export type AdminUserInput = {
 export type ListUsersResponse = {
   users: AdminUser[];
   sheetConfigured: boolean;
+  pagination?: PaginationInfo;
 };
 
 export type SaveUserResponse = {
@@ -645,14 +660,20 @@ export async function listLoanRequests(
   };
 }
 
-export async function listAuditLogs(): Promise<LoanRequestListResponse> {
+export async function listAuditLogs(page: number = 1, perPage: number = 15): Promise<LoanRequestListResponse> {
+  const query = new URLSearchParams();
+  query.set('page', String(page));
+  query.set('per_page', String(perPage));
+  const suffix = `?${query.toString()}`;
+
   const result = unwrap(
-    await apiCall<{ requests: RawRecord[]; sheetConfigured?: boolean }>('/loan-requests/audit'),
+    await apiCall<{ requests: RawRecord[]; sheetConfigured?: boolean; pagination?: PaginationInfo }>(`/loan-requests/audit${suffix}`),
   );
 
   return {
     requests: (result.requests || []).map(mapLoanRequest),
     sheetConfigured: result.sheetConfigured ?? true,
+    pagination: result.pagination,
   };
 }
 
@@ -689,19 +710,30 @@ export async function listMembers(
     query.set('search', payload.query.trim());
   }
 
-  if (payload.limit) {
-    query.set('limit', String(payload.limit));
+  const perPage = payload.perPage ?? payload.limit;
+
+  if (perPage) {
+    query.set('per_page', String(perPage));
+  }
+
+  if (payload.page) {
+    query.set('page', String(payload.page));
   }
 
   const suffix = query.toString() ? `?${query.toString()}` : '';
   const result = unwrap(
-    await apiCall<{ members: RawRecord[]; sheetConfigured?: boolean }>(`/members${suffix}`),
+    await apiCall<{ 
+      members: RawRecord[]; 
+      sheetConfigured?: boolean;
+      pagination?: PaginationInfo;
+    }>(`/members${suffix}`),
   );
   const members = Array.isArray(result.members) ? result.members : [];
 
   return {
     members: members.map(mapMember),
     sheetConfigured: result.sheetConfigured ?? true,
+    pagination: result.pagination,
   };
 }
 
@@ -770,15 +802,32 @@ export async function getLoanTypes(): Promise<GetLoanTypesResponse> {
   return { loanTypes: loanTypeCache };
 }
 
-export async function getBranches(): Promise<GetBranchesResponse> {
-  if (branchCache) {
+export async function getBranches(page?: number, perPage?: number): Promise<GetBranchesResponse> {
+  const shouldPaginate = page !== undefined || perPage !== undefined;
+
+  if (!shouldPaginate && branchCache) {
     return { branches: branchCache };
   }
 
-  const result = unwrap(await apiCall<{ branches: RawRecord[] }>('/branches'));
-  branchCache = (result.branches || []).map(mapBranch);
+  const query = new URLSearchParams();
+  if (shouldPaginate) {
+    query.set('page', String(page ?? 1));
+    query.set('per_page', String(perPage ?? 15));
+  }
 
-  return { branches: branchCache };
+  const suffix = query.toString() ? `?${query.toString()}` : '';
+
+  const result = unwrap(await apiCall<{ branches: RawRecord[]; pagination?: PaginationInfo }>(`/branches${suffix}`));
+  const branches = (result.branches || []).map(mapBranch);
+
+  if (!shouldPaginate) {
+    branchCache = branches;
+  }
+
+  return { 
+    branches,
+    pagination: result.pagination,
+  };
 }
 
 export async function saveBranch(branch: AdminBranchInput): Promise<SaveBranchResponse> {
@@ -985,14 +1034,20 @@ export async function returnLoanRequestToManager(
   };
 }
 
-export async function listUsers(): Promise<ListUsersResponse> {
+export async function listUsers(page: number = 1, perPage: number = 15): Promise<ListUsersResponse> {
+  const query = new URLSearchParams();
+  query.set('page', String(page));
+  query.set('per_page', String(perPage));
+  const suffix = `?${query.toString()}`;
+
   const result = unwrap(
-    await apiCall<{ users: RawRecord[]; sheetConfigured?: boolean }>('/users'),
+    await apiCall<{ users: RawRecord[]; sheetConfigured?: boolean; pagination?: PaginationInfo }>(`/users${suffix}`),
   );
 
   return {
     users: (result.users || []).map(mapUser),
     sheetConfigured: result.sheetConfigured ?? true,
+    pagination: result.pagination,
   };
 }
 
@@ -1009,16 +1064,15 @@ export async function saveUser(user: AdminUserInput): Promise<SaveUserResponse> 
     };
   }
 
-  const existing = (await listUsers()).users.find(
-    (candidate) => candidate.email.toLowerCase() === user.email.toLowerCase(),
-  );
+  const userId = user.id?.trim();
+  const existingId = userId || (await findUserIdByEmail(user.email));
 
-  if (!existing?.id) {
+  if (!existingId) {
     throw new Error('Unable to find the selected user ID.');
   }
 
   const result = await apiCall<RawRecord>(
-    `/users/${encodeURIComponent(existing.id)}`,
+    `/users/${encodeURIComponent(existingId)}`,
     'PUT',
     body,
   );
@@ -1028,6 +1082,30 @@ export async function saveUser(user: AdminUserInput): Promise<SaveUserResponse> 
     message: result.message || 'User updated successfully.',
     user: mapUser(unwrap(result)),
   };
+}
+
+async function findUserIdByEmail(email: string): Promise<string | undefined> {
+  const targetEmail = email.toLowerCase();
+  let page = 1;
+
+  while (page <= 100) {
+    const result = await listUsers(page, 100);
+    const user = result.users.find(
+      (candidate) => candidate.email.toLowerCase() === targetEmail,
+    );
+
+    if (user?.id) {
+      return user.id;
+    }
+
+    if (!result.pagination?.has_more) {
+      return undefined;
+    }
+
+    page += 1;
+  }
+
+  return undefined;
 }
 
 export async function importUsers(users: AdminUserInput[]): Promise<ImportUsersResponse> {

@@ -13,10 +13,22 @@ class UserController extends BaseController
 {
     public function index(Request $request)
     {
-        $users = User::with('branch')->get();
+        $page = max(1, (int)$request->query('page', 1));
+        $perPage = min(max(1, (int)$request->query('per_page', 15)), 100);
+
+        $paginated = User::with('branch')
+            ->orderBy('email')
+            ->paginate($perPage, ['*'], 'page', $page);
 
         return $this->success([
-            'users' => $users,
+            'users' => $paginated->items(),
+            'pagination' => [
+                'page' => $paginated->currentPage(),
+                'per_page' => $paginated->perPage(),
+                'total' => $paginated->total(),
+                'last_page' => $paginated->lastPage(),
+                'has_more' => $paginated->hasMorePages(),
+            ],
             'sheetConfigured' => true,
         ]);
     }

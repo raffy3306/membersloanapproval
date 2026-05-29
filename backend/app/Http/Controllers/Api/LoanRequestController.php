@@ -51,14 +51,24 @@ class LoanRequestController extends BaseController
         ]);
     }
 
-    public function audit()
+    public function audit(Request $request)
     {
-        $requests = LoanRequest::with(['member', 'loanType', 'branch', 'requestedBy', 'manager', 'approver'])
+        $page = max(1, (int)$request->query('page', 1));
+        $perPage = min(max(1, (int)$request->query('per_page', 15)), 100);
+
+        $paginated = LoanRequest::with(['member', 'loanType', 'branch', 'requestedBy', 'manager', 'approver'])
             ->orderByDesc('request_date')
-            ->get();
+            ->paginate($perPage, ['*'], 'page', $page);
 
         return $this->success([
-            'requests' => $requests,
+            'requests' => $paginated->items(),
+            'pagination' => [
+                'page' => $paginated->currentPage(),
+                'per_page' => $paginated->perPage(),
+                'total' => $paginated->total(),
+                'last_page' => $paginated->lastPage(),
+                'has_more' => $paginated->hasMorePages(),
+            ],
             'sheetConfigured' => true,
         ]);
     }

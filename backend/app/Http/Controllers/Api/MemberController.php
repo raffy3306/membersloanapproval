@@ -15,7 +15,8 @@ class MemberController extends BaseController
     public function index(Request $request)
     {
         $search = $request->query('search', '');
-        $limit = min(max((int) $request->query('limit', 50), 1), 1000);
+        $page = max(1, (int) $request->query('page', 1));
+        $perPage = min(max((int) $request->query('per_page', $request->query('limit', 50)), 1), 1000);
         $query = Member::query()->with('branch');
 
         if ($search) {
@@ -39,10 +40,25 @@ class MemberController extends BaseController
             });
         }
 
-        $members = $query
-            ->orderBy($this->memberNameColumn())
-            ->limit($limit)
-            ->get();
+        $query->orderBy($this->memberNameColumn());
+
+        if ($request->has('page') || $request->has('per_page')) {
+            $paginated = $query->paginate($perPage, ['*'], 'page', $page);
+
+            return $this->success([
+                'members' => $paginated->items(),
+                'pagination' => [
+                    'page' => $paginated->currentPage(),
+                    'per_page' => $paginated->perPage(),
+                    'total' => $paginated->total(),
+                    'last_page' => $paginated->lastPage(),
+                    'has_more' => $paginated->hasMorePages(),
+                ],
+                'sheetConfigured' => true,
+            ]);
+        }
+
+        $members = $query->limit($perPage)->get();
 
         return $this->success([
             'members' => $members,

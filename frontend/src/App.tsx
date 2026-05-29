@@ -12,6 +12,8 @@ import {
   AlertTriangle,
   Building2,
   CheckCircle2,
+  ChevronLeft,
+  ChevronRight,
   ClipboardCheck,
   Download,
   Edit,
@@ -61,6 +63,7 @@ import {
   type NewLoanRequest,
   type NewOtherLoan,
   type NewSecurity,
+  type PaginationInfo,
   approveLoanRequest,
   changePassword,
   checkBackendHealth,
@@ -117,6 +120,7 @@ const memberCsvHeaders: Array<keyof Member> = [
 ];
 const memberImportBatchSize = 500;
 const userImportBatchSize = 500;
+const adminPageSize = 15;
 
 type MemberImportField = keyof Member | 'first_name' | 'last_name';
 type MemberImportRow = Partial<Member> & {
@@ -1621,6 +1625,57 @@ function FirstLoginPasswordChange({
   );
 }
 
+function Pagination({
+  pagination,
+  onPageChange,
+}: {
+  pagination: PaginationInfo | undefined;
+  onPageChange: (page: number) => void;
+}) {
+  if (!pagination) {
+    return null;
+  }
+
+  const { page, last_page, total, per_page } = pagination;
+  const lastPage = Math.max(last_page, 1);
+  const currentPage = Math.min(Math.max(page, 1), lastPage);
+  const start = total > 0 ? (currentPage - 1) * per_page + 1 : 0;
+  const end = total > 0 ? Math.min(currentPage * per_page, total) : 0;
+
+  return (
+    <div className="pagination-container">
+      <div className="pagination-info">
+        Showing {start} to {end} of {total} items
+      </div>
+      <div className="pagination-controls">
+        <button
+          className="pagination-button"
+          type="button"
+          onClick={() => onPageChange(currentPage - 1)}
+          disabled={currentPage <= 1}
+          title="Previous page"
+          aria-label="Previous page"
+        >
+          <ChevronLeft size={18} aria-hidden="true" />
+        </button>
+        <span className="pagination-page-info">
+          Page {currentPage} of {lastPage}
+        </span>
+        <button
+          className="pagination-button"
+          type="button"
+          onClick={() => onPageChange(currentPage + 1)}
+          disabled={currentPage >= lastPage}
+          title="Next page"
+          aria-label="Next page"
+        >
+          <ChevronRight size={18} aria-hidden="true" />
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function AdminDashboard({
   activeStatus,
   connectionState,
@@ -1719,6 +1774,8 @@ function AdminDashboard({
 
 function AdminAuditLogs() {
   const [requests, setRequests] = useState<LoanRequest[]>([]);
+  const [pagination, setPagination] = useState<PaginationInfo | undefined>();
+  const [currentPage, setCurrentPage] = useState(1);
   const [isLoading, setIsLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
   const [sheetConfigured, setSheetConfigured] = useState(true);
@@ -1731,17 +1788,19 @@ function AdminAuditLogs() {
       setIsLoading(true);
 
       try {
-        const result = await listAuditLogs();
+        const result = await listAuditLogs(currentPage, adminPageSize);
 
         if (!isCurrent) {
           return;
         }
 
         setRequests(sortLoanRequestsNewestFirst(result.requests));
+        setPagination(result.pagination);
         setSheetConfigured(result.sheetConfigured);
       } catch (error) {
         if (isCurrent) {
           setRequests([]);
+          setPagination(undefined);
           setErrorMessage(getErrorMessage(error));
         }
       } finally {
@@ -1756,53 +1815,58 @@ function AdminAuditLogs() {
     return () => {
       isCurrent = false;
     };
-  }, []);
+  }, [currentPage]);
 
   if (errorMessage) {
     return <p className="error-text">{errorMessage}</p>;
   }
 
   return (
-    <div className="admin-table" role="table" aria-label="Audit logs">
-      <div className="admin-row admin-head" role="row">
-        <span role="columnheader">Request ID</span>
-        <span role="columnheader">Member</span>
-        <span role="columnheader">Branch</span>
-        <span role="columnheader">Requested By</span>
-        <span role="columnheader">Status</span>
-        <span role="columnheader">Requested</span>
-      </div>
-
-      {requests.length ? (
-        requests.map((request) => (
-          <div className="admin-row" role="row" key={getRequestKey(request)}>
-            <span>{request.requestId || '-'}</span>
-            <strong>{request.memberName || '-'}</strong>
-            <span>{formatBranchLabel(request.branchName, request.branchid)}</span>
-            <span>{request.requestedByName || request.requestedBy || '-'}</span>
-            <span>
-              <StatusBadge status={request.status} />
-            </span>
-            <span>{request.requestedAt || '-'}</span>
-          </div>
-        ))
-      ) : (
-        <div className="admin-empty" role="row">
-          <span>
-            {isLoading
-              ? 'Loading audit logs.'
-              : sheetConfigured
-                ? 'No audit records found.'
-                : 'Loan requests table is not available.'}
-          </span>
+    <div className="admin-stack">
+      <div className="admin-table" role="table" aria-label="Audit logs">
+        <div className="admin-row admin-head" role="row">
+          <span role="columnheader">Request ID</span>
+          <span role="columnheader">Member</span>
+          <span role="columnheader">Branch</span>
+          <span role="columnheader">Requested By</span>
+          <span role="columnheader">Status</span>
+          <span role="columnheader">Requested</span>
         </div>
-      )}
+
+        {requests.length ? (
+          requests.map((request) => (
+            <div className="admin-row" role="row" key={getRequestKey(request)}>
+              <span>{request.requestId || '-'}</span>
+              <strong>{request.memberName || '-'}</strong>
+              <span>{formatBranchLabel(request.branchName, request.branchid)}</span>
+              <span>{request.requestedByName || request.requestedBy || '-'}</span>
+              <span>
+                <StatusBadge status={request.status} />
+              </span>
+              <span>{request.requestedAt || '-'}</span>
+            </div>
+          ))
+        ) : (
+          <div className="admin-empty" role="row">
+            <span>
+              {isLoading
+                ? 'Loading audit logs.'
+                : sheetConfigured
+                  ? 'No audit records found.'
+                  : 'Loan requests table is not available.'}
+            </span>
+          </div>
+        )}
+      </div>
+      <Pagination pagination={pagination} onPageChange={setCurrentPage} />
     </div>
   );
 }
 
 function AdminBranches() {
   const [branches, setBranches] = useState<Branch[]>([]);
+  const [pagination, setPagination] = useState<PaginationInfo | undefined>();
+  const [currentPage, setCurrentPage] = useState(1);
   const [editingBranch, setEditingBranch] = useState<Branch | null>(null);
   const [isAdding, setIsAdding] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
@@ -1818,16 +1882,18 @@ function AdminBranches() {
       setIsLoading(true);
 
       try {
-        const result = await getBranches();
+        const result = await getBranches(currentPage, adminPageSize);
 
         if (!isCurrent) {
           return;
         }
 
         setBranches(result.branches);
+        setPagination(result.pagination);
       } catch (error) {
         if (isCurrent) {
           setBranches([]);
+          setPagination(undefined);
           setErrorMessage(getErrorMessage(error));
         }
       } finally {
@@ -1842,12 +1908,13 @@ function AdminBranches() {
     return () => {
       isCurrent = false;
     };
-  }, [refreshToken]);
+  }, [currentPage, refreshToken]);
 
   const handleSaved = (message?: string) => {
     setIsAdding(false);
     setEditingBranch(null);
     setSuccessMessage(message || 'Branch saved.');
+    setCurrentPage(1);
     setRefreshToken((value) => value + 1);
   };
 
@@ -1865,6 +1932,7 @@ function AdminBranches() {
     try {
       const result = await deleteBranch(branch.id);
       setSuccessMessage(result.message || 'Branch deleted successfully.');
+      setCurrentPage(1);
       setRefreshToken((value) => value + 1);
     } catch (error) {
       setErrorMessage(getErrorMessage(error));
@@ -1889,7 +1957,7 @@ function AdminBranches() {
           Add Branch
         </button>
         <span className="count-chip">
-          {isLoading ? 'Loading' : `${branches.length} branches`}
+          {isLoading ? 'Loading' : `${pagination?.total ?? branches.length} branches`}
         </span>
       </div>
 
@@ -1956,6 +2024,7 @@ function AdminBranches() {
           </div>
         )}
       </div>
+      <Pagination pagination={pagination} onPageChange={setCurrentPage} />
     </div>
   );
 }
@@ -2152,6 +2221,8 @@ function getNextBranchCode(branches: Branch[]): string {
 
 function AdminMembers() {
   const [members, setMembers] = useState<Member[]>([]);
+  const [pagination, setPagination] = useState<PaginationInfo | undefined>();
+  const [currentPage, setCurrentPage] = useState(1);
   const [editingMember, setEditingMember] = useState<Member | null>(null);
   const [isAdding, setIsAdding] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
@@ -2172,7 +2243,8 @@ function AdminMembers() {
       try {
         const result = await listMembers({
           query: search,
-          limit: 1000,
+          limit: adminPageSize,
+          page: currentPage,
         });
 
         if (!isCurrent) {
@@ -2180,9 +2252,11 @@ function AdminMembers() {
         }
 
         setMembers(sortMembersByName(result.members));
+        setPagination(result.pagination);
       } catch (error) {
         if (isCurrent) {
           setMembers([]);
+          setPagination(undefined);
           setErrorMessage(getErrorMessage(error));
         }
       } finally {
@@ -2200,7 +2274,7 @@ function AdminMembers() {
       isCurrent = false;
       window.clearTimeout(timeoutId);
     };
-  }, [refreshToken, searchQuery]);
+  }, [refreshToken, searchQuery, currentPage]);
 
   const handleSaved = (message?: string, member?: Member) => {
     setIsAdding(false);
@@ -2211,6 +2285,7 @@ function AdminMembers() {
       setSearchQuery(member.cif_key || member.client_name);
     }
 
+    setCurrentPage(1);
     setRefreshToken((value) => value + 1);
   };
 
@@ -2272,6 +2347,7 @@ function AdminMembers() {
         setErrorMessage(`Some rows were not imported: ${failedRows.join('; ')}`);
       }
 
+      setCurrentPage(1);
       setRefreshToken((value) => value + 1);
     } catch (error) {
       setErrorMessage(getErrorMessage(error));
@@ -2295,6 +2371,7 @@ function AdminMembers() {
     try {
       const result = await deleteMember(member.id || member.cif_key);
       setSuccessMessage(result.message || 'Member deleted successfully.');
+      setCurrentPage(1);
       setRefreshToken((value) => value + 1);
     } catch (error) {
       setErrorMessage(getErrorMessage(error));
@@ -2312,7 +2389,10 @@ function AdminMembers() {
             type="search"
             placeholder="Name, CIF, contact, branch, or occupation"
             value={searchQuery}
-            onChange={(event) => setSearchQuery(event.target.value)}
+            onChange={(event) => {
+              setSearchQuery(event.target.value);
+              setCurrentPage(1);
+            }}
           />
         </label>
         <button
@@ -2348,7 +2428,7 @@ function AdminMembers() {
           Export
         </button>
         <span className="count-chip">
-          {isLoading ? 'Loading' : `${members.length} members`}
+          {isLoading ? 'Loading' : `${pagination?.total ?? members.length} members`}
         </span>
       </div>
 
@@ -2418,6 +2498,7 @@ function AdminMembers() {
           </div>
         )}
       </div>
+      <Pagination pagination={pagination} onPageChange={setCurrentPage} />
     </div>
   );
 }
@@ -2919,6 +3000,8 @@ function sortMembersByName(members: Member[]) {
 
 function AdminUsers() {
   const [users, setUsers] = useState<AdminUser[]>([]);
+  const [pagination, setPagination] = useState<PaginationInfo | undefined>();
+  const [currentPage, setCurrentPage] = useState(1);
   const [editingUser, setEditingUser] = useState<AdminUser | null>(null);
   const [isAdding, setIsAdding] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
@@ -2935,16 +3018,18 @@ function AdminUsers() {
       setIsLoading(true);
 
       try {
-        const result = await listUsers();
+        const result = await listUsers(currentPage, adminPageSize);
 
         if (!isCurrent) {
           return;
         }
 
         setUsers(result.users);
+        setPagination(result.pagination);
       } catch (error) {
         if (isCurrent) {
           setUsers([]);
+          setPagination(undefined);
           setErrorMessage(getErrorMessage(error));
         }
       } finally {
@@ -2959,12 +3044,13 @@ function AdminUsers() {
     return () => {
       isCurrent = false;
     };
-  }, [refreshToken]);
+  }, [currentPage, refreshToken]);
 
   const handleSaved = (message?: string) => {
     setIsAdding(false);
     setEditingUser(null);
     setSuccessMessage(message || 'User saved.');
+    setCurrentPage(1);
     setRefreshToken((value) => value + 1);
   };
 
@@ -3020,6 +3106,7 @@ function AdminUsers() {
         setErrorMessage(`Some rows were not imported: ${failedRows.join('; ')}`);
       }
 
+      setCurrentPage(1);
       setRefreshToken((value) => value + 1);
     } catch (error) {
       setErrorMessage(getErrorMessage(error));
@@ -3055,7 +3142,9 @@ function AdminUsers() {
             hidden
           />
         </label>
-        <span className="count-chip">{isLoading ? 'Loading' : `${users.length} users`}</span>
+        <span className="count-chip">
+          {isLoading ? 'Loading' : `${pagination?.total ?? users.length} users`}
+        </span>
       </div>
 
       {errorMessage ? <p className="error-text">{errorMessage}</p> : null}
@@ -3117,6 +3206,7 @@ function AdminUsers() {
           </div>
         )}
       </div>
+      <Pagination pagination={pagination} onPageChange={setCurrentPage} />
     </div>
   );
 }
@@ -3172,6 +3262,7 @@ function AdminUserForm({
 }) {
   const isNew = !user;
   const [form, setForm] = useState<AdminUserInput>({
+    id: user?.id,
     email: user?.email || '',
     password: '',
     role: user?.role || 'teller',
