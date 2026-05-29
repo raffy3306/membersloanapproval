@@ -399,6 +399,11 @@ class MemberController extends BaseController
     private function copyIfPresent(array &$data, array $source, string $key): void
     {
         if (array_key_exists($key, $source) && $this->hasMemberColumn($key)) {
+            // Only copy non-null values for share_capital and date_of_retirement to prevent
+            // unintentional NULL updates when these fields are not being edited
+            if (in_array($key, ['share_capital', 'date_of_retirement'], true) && $source[$key] === null) {
+                return;
+            }
             $data[$key] = $source[$key];
         }
     }

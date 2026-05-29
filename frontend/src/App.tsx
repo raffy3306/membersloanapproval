@@ -2793,6 +2793,25 @@ function AdminMemberForm({
             readOnly={isReadOnly}
           />
         </label>
+        <label className="field-control">
+          <span>Share Capital</span>
+          <input
+            type="number"
+            step="0.01"
+            value={form.share_capital || ''}
+            onChange={(event) => updateField('share_capital', event.target.value)}
+            readOnly={isReadOnly}
+          />
+        </label>
+        <label className="field-control">
+          <span>Date of Retirement</span>
+          <input
+            type="date"
+            value={form.date_of_retirement || ''}
+            onChange={(event) => updateField('date_of_retirement', event.target.value)}
+            readOnly={isReadOnly}
+          />
+        </label>
         <label className="field-control full">
           <span>Address</span>
           <textarea
@@ -2852,6 +2871,8 @@ function createMemberForm(member: Member | null): AdminMemberInput {
     birthdate,
     contactnumber: member?.contactnumber || '',
     address: member?.address || '',
+    share_capital: member?.share_capital ? String(member.share_capital) : '',
+    date_of_retirement: member?.date_of_retirement || '',
     branch_id: member?.branch_id || '',
     status: normalizeMemberStatus(member?.status),
     tin_number: member?.tin_number || '',
