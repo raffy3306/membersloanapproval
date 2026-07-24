@@ -18,6 +18,15 @@ class MemberController extends BaseController
         $page = max(1, (int) $request->query('page', 1));
         $perPage = min(max((int) $request->query('per_page', $request->query('limit', 50)), 1), 1000);
         $query = Member::query()->with('branch');
+        $user = $request->user();
+
+        if ($user && strtolower(trim((string) $user->role)) === 'teller') {
+            if (is_null($user->branch_id)) {
+                $query->whereRaw('1 = 0');
+            } else {
+                $query->where('branch_id', $user->branch_id);
+            }
+        }
 
         if ($search) {
             $searchableColumns = $this->existingMemberColumns([
@@ -79,11 +88,23 @@ class MemberController extends BaseController
 
     public function store(Request $request)
     {
+        $user = $request->user();
         $validated = $request->validate($this->validationRules([
             'cif_key' => ['required', 'string', 'max:255', 'unique:members,cif_key'],
             'client_name' => ['required_without:fullname', 'nullable', 'string', 'max:255'],
             'fullname' => ['required_without:client_name', 'nullable', 'string', 'max:255'],
         ]));
+
+        if ($user && strtolower(trim((string) $user->role)) === 'teller') {
+            if (is_null($user->branch_id)) {
+                return $this->error(
+                    'Your teller account does not have an assigned branch.',
+                    422
+                );
+            }
+
+            $validated['branch_id'] = (string) $user->branch_id;
+        }
 
         $member = Member::create($this->toMemberData($validated, true));
 

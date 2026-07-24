@@ -180,10 +180,24 @@ export type LoanType = {
   loan_id: string;
   loantype: string;
   description: string;
+  minimumAmount: string;
+  maximumAmount: string;
+  maximumTermMonths: string;
+  interestRate: string;
+  isActive: boolean;
 };
 
 export type GetLoanTypesResponse = {
   loanTypes: LoanType[];
+  pagination?: PaginationInfo;
+};
+
+export type AdminLoanTypeInput = LoanType;
+
+export type SaveLoanTypeResponse = {
+  success: boolean;
+  message?: string;
+  loanType?: LoanType;
 };
 
 export type Branch = {
@@ -802,6 +816,58 @@ export async function getLoanTypes(): Promise<GetLoanTypesResponse> {
   return { loanTypes: loanTypeCache };
 }
 
+export async function listAdminLoanTypes(
+  page: number = 1,
+  perPage: number = 15,
+): Promise<GetLoanTypesResponse> {
+  const result = unwrap(
+    await apiCall<{
+      loanTypes: RawRecord[];
+      pagination?: PaginationInfo;
+    }>(`/admin/loan-types?page=${page}&per_page=${perPage}`),
+  );
+
+  return {
+    loanTypes: (result.loanTypes || []).map(mapLoanType),
+    pagination: result.pagination,
+  };
+}
+
+export async function saveLoanType(
+  loanType: AdminLoanTypeInput,
+): Promise<SaveLoanTypeResponse> {
+  const body: RawRecord = {
+    loan_type_name: loanType.loantype.trim(),
+    description: loanType.description.trim() || null,
+    minimum_amount: toNullableNumber(loanType.minimumAmount),
+    maximum_amount: toNullableNumber(loanType.maximumAmount),
+    maximum_term_months: toNullableNumber(loanType.maximumTermMonths),
+    interest_rate: toNullableNumber(loanType.interestRate),
+    is_active: loanType.isActive,
+  };
+  const loanTypeId = loanType.loan_id.trim();
+  const endpoint = loanTypeId
+    ? `/admin/loan-types/${encodeURIComponent(loanTypeId)}`
+    : '/admin/loan-types';
+  const result = await apiCall<RawRecord>(
+    endpoint,
+    loanTypeId ? 'PUT' : 'POST',
+    body,
+  );
+
+  loanTypeCache = null;
+
+  return {
+    success: true,
+    message:
+      result.message ||
+      (loanTypeId
+        ? 'Loan type updated successfully.'
+        : 'Loan type created successfully.'),
+    loanType: mapLoanType(unwrap(result)),
+  };
+}
+
 export async function getBranches(page?: number, perPage?: number): Promise<GetBranchesResponse> {
   const shouldPaginate = page !== undefined || perPage !== undefined;
 
@@ -1404,6 +1470,18 @@ function mapLoanType(raw: RawRecord): LoanType {
     loan_id: asString(raw.id || raw.loan_id),
     loantype: asString(raw.loan_type_name || raw.loantype),
     description: asString(raw.description),
+    minimumAmount: asString(raw.minimum_amount),
+    maximumAmount: asString(raw.maximum_amount),
+    maximumTermMonths: asString(raw.maximum_term_months),
+    interestRate: asString(raw.interest_rate),
+    isActive:
+      raw.is_active === undefined
+        ? true
+        : Boolean(
+            raw.is_active === true ||
+              raw.is_active === 1 ||
+              raw.is_active === '1',
+          ),
   };
 }
 

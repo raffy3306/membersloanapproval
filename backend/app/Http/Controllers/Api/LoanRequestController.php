@@ -84,6 +84,7 @@ class LoanRequestController extends BaseController
 
     public function store(Request $request)
     {
+        $user = $request->user();
         $validated = $request->validate([
             'cif_key' => 'required|exists:members,cif_key',
             'loan_type_id' => 'required|exists:loan_types,id',
@@ -106,9 +107,31 @@ class LoanRequestController extends BaseController
             'securities' => 'nullable|array',
         ]);
 
-        return DB::transaction(function () use ($validated) {
-            $user = auth('api')->user();
-            $member = Member::where('cif_key', $validated['cif_key'])->first();
+        $member = Member::where('cif_key', $validated['cif_key'])->first();
+
+        if (!$member) {
+            return $this->error('Selected member was not found.', 422);
+        }
+
+        if ($user && strtolower(trim((string) $user->role)) === 'teller') {
+            if (is_null($user->branch_id)) {
+                return $this->error(
+                    'Your teller account does not have an assigned branch.',
+                    422
+                );
+            }
+
+            if ((int) $member->branch_id !== (int) $user->branch_id) {
+                return $this->error(
+                    'The selected member does not belong to your branch.',
+                    422
+                );
+            }
+
+            $validated['branch_id'] = (int) $user->branch_id;
+        }
+
+        return DB::transaction(function () use ($validated, $member, $user) {
             $this->updateMemberRequestFields($member, $validated);
 
             $loanRequest = LoanRequest::create([

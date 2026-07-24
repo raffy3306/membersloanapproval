@@ -4,6 +4,7 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\Api\AuthController;
 use App\Http\Controllers\Api\LoanRequestController;
+use App\Http\Controllers\Api\LoanTypeController;
 use App\Http\Controllers\Api\MemberController;
 use App\Http\Controllers\Api\UserController;
 use App\Http\Controllers\Api\SettingController;
@@ -39,6 +40,9 @@ Route::middleware('auth:api')->group(function () {
     Route::put('/attachments/{attachment}', [AttachmentController::class, 'update']);
     Route::delete('/attachments/{attachment}', [AttachmentController::class, 'destroy']);
     Route::get('/loan-types', [LoanRequestController::class, 'loanTypes']);
+    Route::get('/admin/loan-types', [LoanTypeController::class, 'index']);
+    Route::post('/admin/loan-types', [LoanTypeController::class, 'store']);
+    Route::put('/admin/loan-types/{loanType}', [LoanTypeController::class, 'update']);
 
     // Members
     Route::get('/members', [MemberController::class, 'index']);

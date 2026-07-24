@@ -21,6 +21,7 @@ import {
   EyeOff,
   History,
   Inbox,
+  Landmark,
   LayoutDashboard,
   LockKeyhole,
   LogIn,
@@ -45,6 +46,7 @@ import {
   type BackendConnectionState,
   type AdminBranchInput,
   type AdminMemberInput,
+  type AdminLoanTypeInput,
   type AdminUser,
   type AdminUserInput,
   type AppSettings,
@@ -83,6 +85,7 @@ import {
   importUsers,
   listMembers,
   listAuditLogs,
+  listAdminLoanTypes,
   listLoanRequests,
   listUsers,
   loginUser,
@@ -92,6 +95,7 @@ import {
   searchMembers,
   sendPasswordRecovery,
   saveMember,
+  saveLoanType,
   saveUser,
   updateLoanRequest,
   updateSettings,
@@ -775,8 +779,14 @@ type BackendRow = [label: string, value: string];
 type DashboardKind = 'teller' | 'manager' | 'approver';
 type UserDashboardKind = DashboardKind | 'admin';
 type PageKind = 'login' | UserDashboardKind;
-type DashboardView = LoanRequestListPayload['view'];
-type AdminView = 'audit' | 'branches' | 'members' | 'users' | 'settings';
+type DashboardView = LoanRequestListPayload['view'] | 'members';
+type AdminView =
+  | 'audit'
+  | 'branches'
+  | 'loan-types'
+  | 'members'
+  | 'users'
+  | 'settings';
 type RequestNotesAction = 'manager-return' | 'approver-return' | 'approver-reject';
 
 type DashboardMenu = {
@@ -914,6 +924,12 @@ const dashboardConfigs: Record<DashboardKind, DashboardConfig> = {
         description: 'Approved and disapproved',
         icon: History,
       },
+      {
+        id: 'members',
+        label: 'Members',
+        description: 'View member database',
+        icon: Users,
+      },
     ],
   },
   manager: {
@@ -972,6 +988,12 @@ const adminConfig = {
       label: 'Branches',
       description: 'Manage branch details',
       icon: Building2,
+    },
+    {
+      id: 'loan-types',
+      label: 'Loan Types',
+      description: 'Manage loan products',
+      icon: Landmark,
     },
     {
       id: 'members',
@@ -1763,7 +1785,12 @@ function AdminDashboard({
 
           {activeView === 'audit' ? <AdminAuditLogs /> : null}
           {activeView === 'branches' ? <AdminBranches /> : null}
-          {activeView === 'members' ? <AdminMembers /> : null}
+          {activeView === 'loan-types' ? <AdminLoanTypes /> : null}
+          {activeView === 'members' ? (
+            <AdminMembers
+              canImportExport={user.role.trim().toLowerCase() === 'admin'}
+            />
+          ) : null}
           {activeView === 'users' ? <AdminUsers /> : null}
           {activeView === 'settings' ? <AdminSettings /> : null}
         </section>
@@ -2219,7 +2246,400 @@ function getNextBranchCode(branches: Branch[]): string {
   return String(maxCode + 1).padStart(3, '0');
 }
 
-function AdminMembers() {
+function AdminLoanTypes() {
+  const [loanTypes, setLoanTypes] = useState<LoanType[]>([]);
+  const [pagination, setPagination] = useState<PaginationInfo | undefined>();
+  const [currentPage, setCurrentPage] = useState(1);
+  const [editingLoanType, setEditingLoanType] = useState<LoanType | null>(null);
+  const [isAdding, setIsAdding] = useState(false);
+  const [isLoading, setIsLoading] = useState(false);
+  const [errorMessage, setErrorMessage] = useState('');
+  const [successMessage, setSuccessMessage] = useState('');
+  const [refreshToken, setRefreshToken] = useState(0);
+
+  useEffect(() => {
+    let isCurrent = true;
+
+    const loadLoanTypes = async () => {
+      setErrorMessage('');
+      setIsLoading(true);
+
+      try {
+        const result = await listAdminLoanTypes(currentPage, adminPageSize);
+
+        if (!isCurrent) {
+          return;
+        }
+
+        setLoanTypes(result.loanTypes);
+        setPagination(result.pagination);
+      } catch (error) {
+        if (isCurrent) {
+          setLoanTypes([]);
+          setPagination(undefined);
+          setErrorMessage(getErrorMessage(error));
+        }
+      } finally {
+        if (isCurrent) {
+          setIsLoading(false);
+        }
+      }
+    };
+
+    void loadLoanTypes();
+
+    return () => {
+      isCurrent = false;
+    };
+  }, [currentPage, refreshToken]);
+
+  const handleSaved = (message?: string) => {
+    setIsAdding(false);
+    setEditingLoanType(null);
+    setSuccessMessage(message || 'Loan type saved.');
+    setRefreshToken((value) => value + 1);
+  };
+
+  return (
+    <div className="admin-stack">
+      <div className="panel-actions">
+        <button
+          className="secondary-button inline-button"
+          type="button"
+          onClick={() => {
+            setEditingLoanType(null);
+            setIsAdding(true);
+            setSuccessMessage('');
+          }}
+        >
+          <Plus size={17} aria-hidden="true" />
+          Add Loan Type
+        </button>
+        <span className="count-chip">
+          {isLoading
+            ? 'Loading'
+            : `${pagination?.total ?? loanTypes.length} loan types`}
+        </span>
+      </div>
+
+      {errorMessage ? <p className="error-text">{errorMessage}</p> : null}
+      {successMessage ? <p className="notice-text">{successMessage}</p> : null}
+
+      {(isAdding || editingLoanType) ? (
+        <AdminLoanTypeModal
+          key={editingLoanType?.loan_id || 'new-loan-type'}
+          loanType={editingLoanType}
+          onCancel={() => {
+            setIsAdding(false);
+            setEditingLoanType(null);
+          }}
+          onSaved={handleSaved}
+        />
+      ) : null}
+
+      <div
+        className="admin-table admin-loan-types-table"
+        role="table"
+        aria-label="Loan types"
+      >
+        <div className="admin-row admin-head" role="row">
+          <span role="columnheader">Loan Type</span>
+          <span role="columnheader">Minimum</span>
+          <span role="columnheader">Maximum</span>
+          <span role="columnheader">Max Term</span>
+          <span role="columnheader">Interest</span>
+          <span role="columnheader">Status</span>
+          <span role="columnheader">Action</span>
+        </div>
+
+        {loanTypes.length ? (
+          loanTypes.map((loanType) => (
+            <div className="admin-row" role="row" key={loanType.loan_id}>
+              <strong title={loanType.description}>{loanType.loantype}</strong>
+              <span>{formatOptionalAmount(loanType.minimumAmount)}</span>
+              <span>{formatOptionalAmount(loanType.maximumAmount)}</span>
+              <span>
+                {loanType.maximumTermMonths
+                  ? `${loanType.maximumTermMonths} months`
+                  : '-'}
+              </span>
+              <span>
+                {loanType.interestRate ? `${loanType.interestRate}%` : '-'}
+              </span>
+              <span>
+                <StatusBadge
+                  status={loanType.isActive ? 'ACTIVE' : 'INACTIVE'}
+                />
+              </span>
+              <span>
+                <button
+                  className="icon-action"
+                  type="button"
+                  onClick={() => {
+                    setIsAdding(false);
+                    setEditingLoanType(loanType);
+                    setSuccessMessage('');
+                  }}
+                >
+                  <Edit size={16} aria-hidden="true" />
+                  Edit
+                </button>
+              </span>
+            </div>
+          ))
+        ) : (
+          <div className="admin-empty" role="row">
+            <span>
+              {isLoading ? 'Loading loan types.' : 'No loan types found.'}
+            </span>
+          </div>
+        )}
+      </div>
+      <Pagination pagination={pagination} onPageChange={setCurrentPage} />
+    </div>
+  );
+}
+
+function AdminLoanTypeModal({
+  loanType,
+  onCancel,
+  onSaved,
+}: {
+  loanType: LoanType | null;
+  onCancel: () => void;
+  onSaved: (message?: string) => void;
+}) {
+  const title = loanType ? 'Edit Loan Type' : 'Add Loan Type';
+
+  return (
+    <div className="modal-overlay" onClick={onCancel}>
+      <div
+        aria-labelledby="admin-loan-type-modal-title"
+        aria-modal="true"
+        className="modal-panel loan-type-modal"
+        onClick={(event) => event.stopPropagation()}
+        role="dialog"
+      >
+        <div className="modal-header">
+          <h3 id="admin-loan-type-modal-title">{title}</h3>
+          <button
+            className="icon-action"
+            type="button"
+            onClick={onCancel}
+            title="Close"
+          >
+            <X size={18} aria-hidden="true" />
+          </button>
+        </div>
+        <div className="modal-content">
+          <AdminLoanTypeForm
+            loanType={loanType}
+            onCancel={onCancel}
+            onSaved={onSaved}
+          />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function AdminLoanTypeForm({
+  loanType,
+  onCancel,
+  onSaved,
+}: {
+  loanType: LoanType | null;
+  onCancel: () => void;
+  onSaved: (message?: string) => void;
+}) {
+  const isNew = !loanType;
+  const [form, setForm] = useState<AdminLoanTypeInput>(() => ({
+    loan_id: loanType?.loan_id || '',
+    loantype: loanType?.loantype || '',
+    description: loanType?.description || '',
+    minimumAmount: loanType?.minimumAmount || '',
+    maximumAmount: loanType?.maximumAmount || '',
+    maximumTermMonths: loanType?.maximumTermMonths || '',
+    interestRate: loanType?.interestRate || '',
+    isActive: loanType?.isActive ?? true,
+  }));
+  const [formError, setFormError] = useState('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  const updateField = (
+    field: keyof AdminLoanTypeInput,
+    value: string | boolean,
+  ) => {
+    setForm((current) => ({
+      ...current,
+      [field]: value,
+    }));
+  };
+
+  const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setFormError('');
+
+    if (!form.loantype.trim()) {
+      setFormError('Loan Type Name is required.');
+      return;
+    }
+
+    if (
+      form.minimumAmount &&
+      form.maximumAmount &&
+      Number(form.maximumAmount) < Number(form.minimumAmount)
+    ) {
+      setFormError('Maximum Amount cannot be less than Minimum Amount.');
+      return;
+    }
+
+    setIsSubmitting(true);
+
+    try {
+      const result = await saveLoanType({
+        ...form,
+        loantype: form.loantype.trim(),
+        description: form.description.trim(),
+      });
+
+      onSaved(result.message);
+    } catch (error) {
+      setFormError(getErrorMessage(error));
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  return (
+    <form className="request-form admin-loan-type-form" onSubmit={handleSubmit}>
+      <div className="form-grid compact">
+        <label className="field-control full">
+          <span>Loan Type Name</span>
+          <input
+            value={form.loantype}
+            onChange={(event) => updateField('loantype', event.target.value)}
+            required
+          />
+        </label>
+        <label className="field-control">
+          <span>Minimum Amount</span>
+          <input
+            type="number"
+            min="0"
+            step="0.01"
+            value={form.minimumAmount}
+            onChange={(event) =>
+              updateField('minimumAmount', event.target.value)
+            }
+          />
+        </label>
+        <label className="field-control">
+          <span>Maximum Amount</span>
+          <input
+            type="number"
+            min="0"
+            step="0.01"
+            value={form.maximumAmount}
+            onChange={(event) =>
+              updateField('maximumAmount', event.target.value)
+            }
+          />
+        </label>
+        <label className="field-control">
+          <span>Maximum Term (Months)</span>
+          <input
+            type="number"
+            min="1"
+            step="1"
+            value={form.maximumTermMonths}
+            onChange={(event) =>
+              updateField('maximumTermMonths', event.target.value)
+            }
+          />
+        </label>
+        <label className="field-control">
+          <span>Interest Rate (%)</span>
+          <input
+            type="number"
+            min="0"
+            max="100"
+            step="0.01"
+            value={form.interestRate}
+            onChange={(event) =>
+              updateField('interestRate', event.target.value)
+            }
+          />
+        </label>
+        <label className="field-control">
+          <span>Status</span>
+          <select
+            value={form.isActive ? 'ACTIVE' : 'INACTIVE'}
+            onChange={(event) =>
+              updateField('isActive', event.target.value === 'ACTIVE')
+            }
+          >
+            <option value="ACTIVE">ACTIVE</option>
+            <option value="INACTIVE">INACTIVE</option>
+          </select>
+        </label>
+        <label className="field-control full">
+          <span>Description</span>
+          <textarea
+            value={form.description}
+            onChange={(event) =>
+              updateField('description', event.target.value)
+            }
+          />
+        </label>
+      </div>
+
+      {formError ? <p className="error-text">{formError}</p> : null}
+
+      <div className="form-actions">
+        <button className="secondary-button" type="button" onClick={onCancel}>
+          <X size={17} aria-hidden="true" />
+          Cancel
+        </button>
+        <button
+          className="primary-button inline-primary"
+          type="submit"
+          disabled={isSubmitting}
+        >
+          <Save size={17} aria-hidden="true" />
+          {isSubmitting
+            ? 'Saving'
+            : isNew
+              ? 'Add Loan Type'
+              : 'Save Loan Type'}
+        </button>
+      </div>
+    </form>
+  );
+}
+
+function formatOptionalAmount(value: string) {
+  if (!value) {
+    return '-';
+  }
+
+  const amount = Number(value);
+
+  return Number.isFinite(amount)
+    ? amount.toLocaleString('en-PH', {
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2,
+      })
+    : value;
+}
+
+function AdminMembers({
+  canImportExport,
+  lockedBranchId,
+}: {
+  canImportExport: boolean;
+  lockedBranchId?: string;
+}) {
   const [members, setMembers] = useState<Member[]>([]);
   const [pagination, setPagination] = useState<PaginationInfo | undefined>();
   const [currentPage, setCurrentPage] = useState(1);
@@ -2407,26 +2827,30 @@ function AdminMembers() {
           <Plus size={17} aria-hidden="true" />
           Add Member
         </button>
-        <label className={`secondary-button inline-button ${isImporting ? 'disabled-label' : ''}`}>
-          <Upload size={17} aria-hidden="true" />
-          {isImporting ? 'Importing' : 'Import'}
-          <input
-            type="file"
-            accept=".csv,.sql,text/csv,text/plain,application/sql"
-            onChange={handleImportMembers}
-            disabled={isImporting}
-            hidden
-          />
-        </label>
-        <button
-          className="secondary-button inline-button"
-          type="button"
-          onClick={handleExportMembers}
-          disabled={isLoading || !members.length}
-        >
-          <Download size={17} aria-hidden="true" />
-          Export
-        </button>
+        {canImportExport ? (
+          <>
+            <label className={`secondary-button inline-button ${isImporting ? 'disabled-label' : ''}`}>
+              <Upload size={17} aria-hidden="true" />
+              {isImporting ? 'Importing' : 'Import'}
+              <input
+                type="file"
+                accept=".csv,.sql,text/csv,text/plain,application/sql"
+                onChange={handleImportMembers}
+                disabled={isImporting}
+                hidden
+              />
+            </label>
+            <button
+              className="secondary-button inline-button"
+              type="button"
+              onClick={handleExportMembers}
+              disabled={isLoading || !members.length}
+            >
+              <Download size={17} aria-hidden="true" />
+              Export
+            </button>
+          </>
+        ) : null}
         <span className="count-chip">
           {isLoading ? 'Loading' : `${pagination?.total ?? members.length} members`}
         </span>
@@ -2438,6 +2862,7 @@ function AdminMembers() {
       {(isAdding || editingMember) ? (
         <AdminMemberModal
           key={editingMember?.id || editingMember?.cif_key || 'new-member'}
+          lockedBranchId={lockedBranchId}
           member={editingMember}
           onCancel={() => {
             setIsAdding(false);
@@ -2504,10 +2929,12 @@ function AdminMembers() {
 }
 
 function AdminMemberModal({
+  lockedBranchId,
   member,
   onCancel,
   onSaved,
 }: {
+  lockedBranchId?: string;
   member: Member | null;
   onCancel: () => void;
   onSaved: (message?: string, member?: Member) => void;
@@ -2536,7 +2963,12 @@ function AdminMemberModal({
         </div>
 
         <div className="modal-content">
-          <AdminMemberForm member={member} onCancel={onCancel} onSaved={onSaved} />
+          <AdminMemberForm
+            lockedBranchId={lockedBranchId}
+            member={member}
+            onCancel={onCancel}
+            onSaved={onSaved}
+          />
         </div>
       </div>
     </div>
@@ -2544,16 +2976,18 @@ function AdminMemberModal({
 }
 
 function AdminMemberForm({
+  lockedBranchId,
   member,
   onCancel,
   onSaved,
 }: {
+  lockedBranchId?: string;
   member: Member | null;
   onCancel: () => void;
   onSaved: (message?: string, member?: Member) => void;
 }) {
   const [form, setForm] = useState<AdminMemberInput>(() =>
-    createMemberForm(member),
+    createMemberForm(member, lockedBranchId),
   );
   const [formError, setFormError] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -2615,7 +3049,10 @@ function AdminMemberForm({
   }, [branches]);
 
   const updateField = (field: keyof AdminMemberInput, value: string) => {
-    if (isReadOnly) {
+    if (
+      isReadOnly ||
+      (isNew && field === 'branch_id' && Boolean(lockedBranchId))
+    ) {
       return;
     }
 
@@ -2655,6 +3092,8 @@ function AdminMemberForm({
         ...form,
         cif_key: form.cif_key.trim(),
         client_name: form.client_name.trim(),
+        branch_id:
+          isNew && lockedBranchId ? lockedBranchId : form.branch_id,
       });
 
       if (!result.success) {
@@ -2755,7 +3194,11 @@ function AdminMemberForm({
           <select
             value={form.branch_id || ''}
             onChange={(event) => updateField('branch_id', event.target.value)}
-            disabled={isReadOnly || isBranchesLoading}
+            disabled={
+              isReadOnly ||
+              isBranchesLoading ||
+              (isNew && Boolean(lockedBranchId))
+            }
           >
             <option value="">- Select Branch -</option>
             {branches.map((branch) => (
@@ -2857,7 +3300,10 @@ function AdminMemberForm({
   );
 }
 
-function createMemberForm(member: Member | null): AdminMemberInput {
+function createMemberForm(
+  member: Member | null,
+  defaultBranchId?: string,
+): AdminMemberInput {
   const birthdate = member?.birthdate || '';
 
   return {
@@ -2873,7 +3319,7 @@ function createMemberForm(member: Member | null): AdminMemberInput {
     address: member?.address || '',
     share_capital: member?.share_capital ? String(member.share_capital) : '',
     date_of_retirement: member?.date_of_retirement || '',
-    branch_id: member?.branch_id || '',
+    branch_id: member?.branch_id || defaultBranchId || '',
     status: normalizeMemberStatus(member?.status),
     tin_number: member?.tin_number || '',
     occupation: member?.occupation || '',
@@ -3645,6 +4091,7 @@ function Dashboard({
     user,
   });
   const isTellerDashboard = dashboard === 'teller';
+  const isMembersView = activeView === 'members';
 
   const handleRequestCreated = () => {
     setShowRequestForm(false);
@@ -3906,15 +4353,17 @@ function Dashboard({
           <p className="error-text dashboard-notice">{errorMessage}</p>
         ) : null}
 
-        <section className="dashboard-stats" aria-label="Dashboard summary">
-          {summaryCards.map(({ icon: Icon, label, value }) => (
-            <article className="stat-card" key={label}>
-              <Icon size={20} aria-hidden="true" />
-              <span>{label}</span>
-              <strong>{value}</strong>
-            </article>
-          ))}
-        </section>
+        {!isMembersView ? (
+          <section className="dashboard-stats" aria-label="Dashboard summary">
+            {summaryCards.map(({ icon: Icon, label, value }) => (
+              <article className="stat-card" key={label}>
+                <Icon size={20} aria-hidden="true" />
+                <span>{label}</span>
+                <strong>{value}</strong>
+              </article>
+            ))}
+          </section>
+        ) : null}
 
         <section className="requests-panel" aria-labelledby="requests-title">
           <div className="panel-heading">
@@ -3923,7 +4372,7 @@ function Dashboard({
               <h2 id="requests-title">{activeMenu.label}</h2>
             </div>
             <div className="panel-actions">
-              {isTellerDashboard ? (
+              {isTellerDashboard && !isMembersView ? (
                 <button
                   className="secondary-button inline-button"
                   type="button"
@@ -3940,20 +4389,34 @@ function Dashboard({
                   {showRequestForm ? 'Close' : 'New Request'}
                 </button>
               ) : null}
-              <span className="count-chip">
-                {isLoading ? 'Loading' : `${requests.length} records`}
-              </span>
+              {!isMembersView ? (
+                <span className="count-chip">
+                  {isLoading ? 'Loading' : `${requests.length} records`}
+                </span>
+              ) : null}
             </div>
           </div>
 
-          {requestError ? <p className="error-text">{requestError}</p> : null}
-
-          <RequestTable
-            isLoading={isLoading}
-            requests={requests}
-            sheetConfigured={sheetConfigured}
-            onViewRequest={setViewedRequest}
-          />
+          {isMembersView ? (
+            <AdminMembers
+              canImportExport={user.role.trim().toLowerCase() === 'admin'}
+              lockedBranchId={
+                user.role.trim().toLowerCase() === 'teller'
+                  ? String(user.branchid || '')
+                  : undefined
+              }
+            />
+          ) : (
+            <>
+              {requestError ? <p className="error-text">{requestError}</p> : null}
+              <RequestTable
+                isLoading={isLoading}
+                requests={requests}
+                sheetConfigured={sheetConfigured}
+                onViewRequest={setViewedRequest}
+              />
+            </>
+          )}
         </section>
 
         {viewedRequest ? (
@@ -6247,9 +6710,16 @@ function useLoanRequests(
 
   useEffect(() => {
     let isCurrent = true;
+    const requestView = view === 'members' ? null : view;
 
     const loadRequests = async () => {
       setRequestError('');
+
+      if (!requestView) {
+        setRequests([]);
+        setIsLoading(false);
+        return;
+      }
 
       if (!hasLaravelApiUrl) {
         setRequests([]);
@@ -6264,7 +6734,7 @@ function useLoanRequests(
           branchid: user.branchid,
           dashboard,
           email: user.email,
-          view,
+          view: requestView,
         });
 
         if (!isCurrent) {
