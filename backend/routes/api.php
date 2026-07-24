@@ -48,6 +48,7 @@ Route::middleware('auth:api')->group(function () {
     Route::get('/members', [MemberController::class, 'index']);
     Route::post('/members', [MemberController::class, 'store']);
     Route::post('/members/import', [MemberController::class, 'import']);
+    Route::delete('/members', [MemberController::class, 'destroyAll']);
     Route::get('/members/{id}', [MemberController::class, 'show']);
     Route::put('/members/{id}', [MemberController::class, 'update']);
     Route::delete('/members/{id}', [MemberController::class, 'destroy']);
@@ -56,6 +57,7 @@ Route::middleware('auth:api')->group(function () {
     Route::get('/users', [UserController::class, 'index']);
     Route::post('/users', [UserController::class, 'store']);
     Route::post('/users/import', [UserController::class, 'import']);
+    Route::delete('/users', [UserController::class, 'destroyAll']);
     Route::get('/users/{id}', [UserController::class, 'show']);
     Route::put('/users/{id}', [UserController::class, 'update']);
     Route::delete('/users/{id}', [UserController::class, 'destroy']);

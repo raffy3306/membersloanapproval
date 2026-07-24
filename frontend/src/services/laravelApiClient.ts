@@ -163,6 +163,12 @@ export type SaveMemberResponse = {
   member?: Member;
 };
 
+export type BulkDeleteResponse = {
+  success: boolean;
+  message?: string;
+  deletedCount: number;
+};
+
 export type ImportMemberError = {
   row?: number;
   cif_key?: string;
@@ -782,6 +788,17 @@ export async function deleteMember(memberId: string): Promise<SaveMemberResponse
   };
 }
 
+export async function deleteAllMembers(confirmation: string): Promise<BulkDeleteResponse> {
+  const result = await apiCall<RawRecord>('/members', 'DELETE', { confirmation });
+  const data = unwrap(result);
+
+  return {
+    success: true,
+    message: result.message || 'All members deleted successfully.',
+    deletedCount: toNumber(asString(data.deleted_count)),
+  };
+}
+
 export async function importMembers(members: AdminMemberInput[]): Promise<ImportMembersResponse> {
   const result = unwrap(
     await apiCall<RawRecord>('/members/import', 'POST', {
@@ -1194,6 +1211,17 @@ export async function importUsers(users: AdminUserInput[]): Promise<ImportUsersR
     updated: toNumber(asString(result.updated)),
     failed: toNumber(asString(result.failed)),
     errors,
+  };
+}
+
+export async function deleteAllUsers(confirmation: string): Promise<BulkDeleteResponse> {
+  const result = await apiCall<RawRecord>('/users', 'DELETE', { confirmation });
+  const data = unwrap(result);
+
+  return {
+    success: true,
+    message: result.message || 'All users deleted successfully.',
+    deletedCount: toNumber(asString(data.deleted_count)),
   };
 }
 

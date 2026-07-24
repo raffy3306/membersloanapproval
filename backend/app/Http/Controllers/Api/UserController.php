@@ -7,6 +7,7 @@ use App\Models\User;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Validator;
+use Illuminate\Validation\Rule;
 use Illuminate\Validation\ValidationException;
 
 class UserController extends BaseController
@@ -181,6 +182,27 @@ class UserController extends BaseController
         $user->delete();
 
         return $this->success([], 'User deleted successfully');
+    }
+
+    public function destroyAll(Request $request)
+    {
+        $currentUser = $request->user();
+
+        if (strtolower(trim((string) $currentUser?->role)) !== 'admin') {
+            return $this->error('Only administrators can delete all users.', 403);
+        }
+
+        $request->validate([
+            'confirmation' => ['required', Rule::in(['DELETE ALL USERS'])],
+        ]);
+
+        $deletedCount = User::query()
+            ->whereKeyNot($currentUser->getKey())
+            ->delete();
+
+        return $this->success([
+            'deleted_count' => $deletedCount,
+        ], "{$deletedCount} users deleted successfully. Your signed-in admin account was kept.");
     }
 
     private function normalizeStatus($status): string
