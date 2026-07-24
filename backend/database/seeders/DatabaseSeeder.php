@@ -13,6 +13,8 @@ class DatabaseSeeder extends Seeder
 {
     public function run(): void
     {
+        $this->call(MembersTableSeeder::class);
+
         $mainBranch = Branch::updateOrCreate(
             ['branch_code' => 'MAIN'],
             [
