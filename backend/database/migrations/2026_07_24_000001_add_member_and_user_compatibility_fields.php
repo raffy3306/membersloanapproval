@@ -11,39 +11,43 @@ return new class extends Migration
     {
         Schema::table('members', function (Blueprint $table) {
             if (!Schema::hasColumn('members', 'fullname')) {
-                $table->string('fullname')->nullable()->after('client_name');
+                $table->string('fullname')->nullable();
             }
 
             if (!Schema::hasColumn('members', 'member_type')) {
-                $table->string('member_type')->nullable()->after('membership_type');
+                $table->string('member_type')->default('Regular Member');
             }
 
             if (!Schema::hasColumn('members', 'birth_date')) {
-                $table->date('birth_date')->nullable()->after('birthdate');
+                $table->date('birth_date')->nullable();
             }
 
             if (!Schema::hasColumn('members', 'contact')) {
-                $table->string('contact')->nullable()->after('contactnumber');
+                $table->string('contact')->nullable();
             }
 
             if (!Schema::hasColumn('members', 'location')) {
-                $table->string('location')->nullable()->after('address');
+                $table->string('location')->nullable();
             }
 
             if (!Schema::hasColumn('members', 'tin')) {
-                $table->string('tin')->nullable()->after('tin_number');
+                $table->string('tin')->nullable();
             }
 
             if (!Schema::hasColumn('members', 'monthly_income')) {
-                $table->decimal('monthly_income', 15, 2)->nullable()->after('tin');
+                $table->decimal('monthly_income', 12, 2)->default(0);
+            }
+
+            if (!Schema::hasColumn('members', 'income_source_id')) {
+                $table->integer('income_source_id')->nullable();
             }
 
             if (!Schema::hasColumn('members', 'share_capital')) {
-                $table->decimal('share_capital', 15, 2)->nullable()->after('membership_date');
+                $table->decimal('share_capital', 15, 2)->nullable();
             }
 
             if (!Schema::hasColumn('members', 'date_of_retirement')) {
-                $table->date('date_of_retirement')->nullable()->after('share_capital');
+                $table->date('date_of_retirement')->nullable();
             }
         });
 
@@ -80,6 +84,7 @@ return new class extends Migration
                 'location',
                 'tin',
                 'monthly_income',
+                'income_source_id',
                 'share_capital',
                 'date_of_retirement',
             ];

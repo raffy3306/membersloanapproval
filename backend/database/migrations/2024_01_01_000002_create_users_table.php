@@ -17,6 +17,7 @@ return new class extends Migration
             $table->string('position')->nullable();
             $table->unsignedBigInteger('branch_id')->nullable();
             $table->boolean('first_login')->default(true);
+            $table->string('status')->default('ACTIVE');
             $table->timestamp('last_login_at')->nullable();
             $table->rememberToken();
             $table->timestamps();
