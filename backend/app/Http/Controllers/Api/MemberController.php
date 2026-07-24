@@ -195,6 +195,23 @@ class MemberController extends BaseController
         return $this->success([], 'Member deleted successfully');
     }
 
+    public function destroyAll(Request $request)
+    {
+        if (strtolower(trim((string) $request->user()?->role)) !== 'admin') {
+            return $this->error('Only administrators can delete all members.', 403);
+        }
+
+        $request->validate([
+            'confirmation' => ['required', Rule::in(['DELETE ALL MEMBERS'])],
+        ]);
+
+        $deletedCount = Member::query()->delete();
+
+        return $this->success([
+            'deleted_count' => $deletedCount,
+        ], "{$deletedCount} members deleted successfully.");
+    }
+
     private function findMember(string $id): ?Member
     {
         return Member::where('id', $id)

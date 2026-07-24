@@ -1393,6 +1393,16 @@ button {
   color: var(--brand-orange);
 }
 
+.danger-button {
+  border-color: rgba(207, 40, 40, 0.3);
+  color: #b42318;
+}
+
+.danger-button:hover:not(:disabled) {
+  background: #fff1f0;
+  border-color: rgba(180, 35, 24, 0.5);
+}
+
 .disabled-label {
   cursor: not-allowed;
   opacity: 0.6;

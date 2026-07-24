@@ -70,6 +70,8 @@ import {
   changePassword,
   checkBackendHealth,
   createLoanRequest,
+  deleteAllMembers,
+  deleteAllUsers,
   deleteAttachment,
   deleteBranch,
   deleteMember,
@@ -2672,6 +2674,7 @@ function AdminMembers({
   const [isAdding, setIsAdding] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [isImporting, setIsImporting] = useState(false);
+  const [isDeletingAll, setIsDeletingAll] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
   const [successMessage, setSuccessMessage] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
@@ -2825,6 +2828,39 @@ function AdminMembers({
     }
   };
 
+  const handleDeleteAllMembers = async () => {
+    const confirmationPhrase = 'DELETE ALL MEMBERS';
+    const confirmation = window.prompt(
+      `This will delete every member from the admin dashboard. Type ${confirmationPhrase} to continue.`,
+    );
+
+    if (confirmation === null) {
+      return;
+    }
+
+    if (confirmation !== confirmationPhrase) {
+      setSuccessMessage('');
+      setErrorMessage(`Deletion cancelled. Enter ${confirmationPhrase} exactly.`);
+      return;
+    }
+
+    setErrorMessage('');
+    setSuccessMessage('');
+    setIsDeletingAll(true);
+
+    try {
+      const result = await deleteAllMembers(confirmation);
+      setSuccessMessage(result.message || `${result.deletedCount} members deleted successfully.`);
+      setSearchQuery('');
+      setCurrentPage(1);
+      setRefreshToken((value) => value + 1);
+    } catch (error) {
+      setErrorMessage(getErrorMessage(error));
+    } finally {
+      setIsDeletingAll(false);
+    }
+  };
+
   return (
     <div className="admin-stack">
       <div className="panel-actions">
@@ -2873,6 +2909,20 @@ function AdminMembers({
             >
               <Download size={17} aria-hidden="true" />
               Export
+            </button>
+            <button
+              className="secondary-button inline-button danger-button"
+              type="button"
+              onClick={() => void handleDeleteAllMembers()}
+              disabled={
+                isLoading ||
+                isImporting ||
+                isDeletingAll ||
+                !(pagination?.total ?? members.length)
+              }
+            >
+              <Trash2 size={17} aria-hidden="true" />
+              {isDeletingAll ? 'Deleting' : 'Delete All'}
             </button>
           </>
         ) : null}
@@ -3499,6 +3549,7 @@ function AdminUsers() {
   const [isLoading, setIsLoading] = useState(false);
   const [isImporting, setIsImporting] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
+  const [isDeletingAll, setIsDeletingAll] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
   const [successMessage, setSuccessMessage] = useState('');
   const [refreshToken, setRefreshToken] = useState(0);
@@ -3640,6 +3691,38 @@ function AdminUsers() {
     }
   };
 
+  const handleDeleteAllUsers = async () => {
+    const confirmationPhrase = 'DELETE ALL USERS';
+    const confirmation = window.prompt(
+      `This will delete every user except your signed-in admin account. Type ${confirmationPhrase} to continue.`,
+    );
+
+    if (confirmation === null) {
+      return;
+    }
+
+    if (confirmation !== confirmationPhrase) {
+      setSuccessMessage('');
+      setErrorMessage(`Deletion cancelled. Enter ${confirmationPhrase} exactly.`);
+      return;
+    }
+
+    setErrorMessage('');
+    setSuccessMessage('');
+    setIsDeletingAll(true);
+
+    try {
+      const result = await deleteAllUsers(confirmation);
+      setSuccessMessage(result.message || `${result.deletedCount} users deleted successfully.`);
+      setCurrentPage(1);
+      setRefreshToken((value) => value + 1);
+    } catch (error) {
+      setErrorMessage(getErrorMessage(error));
+    } finally {
+      setIsDeletingAll(false);
+    }
+  };
+
   return (
     <div className="admin-stack">
       <div className="panel-actions">
@@ -3674,6 +3757,21 @@ function AdminUsers() {
         >
           <Download size={17} aria-hidden="true" />
           {isExporting ? 'Exporting' : 'Export'}
+        </button>
+        <button
+          className="secondary-button inline-button danger-button"
+          type="button"
+          onClick={() => void handleDeleteAllUsers()}
+          disabled={
+            isLoading ||
+            isImporting ||
+            isExporting ||
+            isDeletingAll ||
+            (pagination?.total ?? users.length) <= 1
+          }
+        >
+          <Trash2 size={17} aria-hidden="true" />
+          {isDeletingAll ? 'Deleting' : 'Delete All'}
         </button>
         <span className="count-chip">
           {isLoading ? 'Loading' : `${pagination?.total ?? users.length} users`}
