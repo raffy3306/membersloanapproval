@@ -125,6 +125,7 @@ const memberCsvHeaders: Array<keyof Member> = [
 const memberImportBatchSize = 500;
 const userImportBatchSize = 500;
 const adminPageSize = 15;
+const exportPageSize = 100;
 
 type MemberImportField = keyof Member | 'first_name' | 'last_name';
 type MemberImportRow = Partial<Member> & {
@@ -178,8 +179,31 @@ function convertToCSV(members: Member[]): string {
   return [memberCsvHeaders.join(','), ...rows].join('\n');
 }
 
+function convertUsersToCSV(users: AdminUser[]): string {
+  const headers = [
+    'email',
+    'role',
+    'fullname',
+    'position',
+    'branch_id',
+    'first_login',
+    'status',
+  ];
+  const rows = users.map((user) => [
+    user.email,
+    user.role,
+    user.fullname,
+    user.position,
+    user.branchid,
+    user.firstLogin ? 'TRUE' : 'FALSE',
+    user.status,
+  ].map(escapeCsvCell).join(','));
+
+  return [headers.join(','), ...rows].join('\n');
+}
+
 function escapeCsvCell(value: unknown): string {
-  const stringValue = String(value || '');
+  const stringValue = value === null || value === undefined ? '' : String(value);
 
   if (/[",\r\n]/.test(stringValue)) {
     return `"${stringValue.replace(/"/g, '""')}"`;
@@ -200,6 +224,7 @@ function downloadCSV(csv: string, filename: string): void {
   document.body.appendChild(link);
   link.click();
   document.body.removeChild(link);
+  URL.revokeObjectURL(url);
 }
 
 function parseMemberImportFile(contents: string, fileName: string): Partial<Member>[] {
@@ -3473,6 +3498,7 @@ function AdminUsers() {
   const [isAdding, setIsAdding] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [isImporting, setIsImporting] = useState(false);
+  const [isExporting, setIsExporting] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
   const [successMessage, setSuccessMessage] = useState('');
   const [refreshToken, setRefreshToken] = useState(0);
@@ -3583,6 +3609,37 @@ function AdminUsers() {
     }
   };
 
+  const handleExportUsers = async () => {
+    setErrorMessage('');
+    setSuccessMessage('');
+    setIsExporting(true);
+
+    try {
+      const exportedUsers: AdminUser[] = [];
+      let page = 1;
+      let hasMore = true;
+
+      while (hasMore) {
+        const result = await listUsers(page, exportPageSize);
+        exportedUsers.push(...result.users);
+        hasMore = result.pagination?.has_more ?? false;
+        page += 1;
+      }
+
+      if (!exportedUsers.length) {
+        setErrorMessage('There are no users to export.');
+        return;
+      }
+
+      downloadCSV(convertUsersToCSV(exportedUsers), 'users.csv');
+      setSuccessMessage(`${exportedUsers.length} users exported successfully.`);
+    } catch (error) {
+      setErrorMessage(getErrorMessage(error));
+    } finally {
+      setIsExporting(false);
+    }
+  };
+
   return (
     <div className="admin-stack">
       <div className="panel-actions">
@@ -3609,6 +3666,15 @@ function AdminUsers() {
             hidden
           />
         </label>
+        <button
+          className="secondary-button inline-button"
+          type="button"
+          onClick={() => void handleExportUsers()}
+          disabled={isLoading || isImporting || isExporting || !(pagination?.total ?? users.length)}
+        >
+          <Download size={17} aria-hidden="true" />
+          {isExporting ? 'Exporting' : 'Export'}
+        </button>
         <span className="count-chip">
           {isLoading ? 'Loading' : `${pagination?.total ?? users.length} users`}
         </span>
