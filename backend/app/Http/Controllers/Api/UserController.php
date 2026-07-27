@@ -196,13 +196,13 @@ class UserController extends BaseController
             'confirmation' => ['required', Rule::in(['DELETE ALL USERS'])],
         ]);
 
-        $deletedCount = User::query()
+        $deletedCount = User::withTrashed()
             ->whereKeyNot($currentUser->getKey())
-            ->delete();
+            ->forceDelete();
 
         return $this->success([
             'deleted_count' => $deletedCount,
-        ], "{$deletedCount} users deleted successfully. Your signed-in admin account was kept.");
+        ], "{$deletedCount} users permanently deleted successfully. Your signed-in admin account was kept.");
     }
 
     private function normalizeStatus($status): string

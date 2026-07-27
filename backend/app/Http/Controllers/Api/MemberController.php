@@ -205,11 +205,11 @@ class MemberController extends BaseController
             'confirmation' => ['required', Rule::in(['DELETE ALL MEMBERS'])],
         ]);
 
-        $deletedCount = Member::query()->delete();
+        $deletedCount = Member::withTrashed()->forceDelete();
 
         return $this->success([
             'deleted_count' => $deletedCount,
-        ], "{$deletedCount} members deleted successfully.");
+        ], "{$deletedCount} members permanently deleted successfully.");
     }
 
     private function findMember(string $id): ?Member
@@ -437,9 +437,13 @@ class MemberController extends BaseController
     private function copyIfPresent(array &$data, array $source, string $key): void
     {
         if (array_key_exists($key, $source) && $this->hasMemberColumn($key)) {
-            // Only copy non-null values for share_capital and date_of_retirement to prevent
-            // unintentional NULL updates when these fields are not being edited
-            if (in_array($key, ['share_capital', 'date_of_retirement'], true) && $source[$key] === null) {
+            // Blank optional values from CSV imports may arrive as either null or an
+            // empty string. Omitting them preserves existing values and avoids model
+            // cast/database errors on installations without empty-string middleware.
+            if (
+                in_array($key, ['share_capital', 'date_of_retirement'], true) &&
+                ($source[$key] === null || trim((string) $source[$key]) === '')
+            ) {
                 return;
             }
             $data[$key] = $source[$key];

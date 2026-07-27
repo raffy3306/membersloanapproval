@@ -2831,7 +2831,7 @@ function AdminMembers({
   const handleDeleteAllMembers = async () => {
     const confirmationPhrase = 'DELETE ALL MEMBERS';
     const confirmation = window.prompt(
-      `This will delete every member from the admin dashboard. Type ${confirmationPhrase} to continue.`,
+      `This will permanently delete every member and their related loan records. This cannot be undone. Type ${confirmationPhrase} to continue.`,
     );
 
     if (confirmation === null) {
@@ -3694,7 +3694,7 @@ function AdminUsers() {
   const handleDeleteAllUsers = async () => {
     const confirmationPhrase = 'DELETE ALL USERS';
     const confirmation = window.prompt(
-      `This will delete every user except your signed-in admin account. Type ${confirmationPhrase} to continue.`,
+      `This will permanently delete every other user except your signed-in admin account. This cannot be undone. Type ${confirmationPhrase} to continue.`,
     );
 
     if (confirmation === null) {
