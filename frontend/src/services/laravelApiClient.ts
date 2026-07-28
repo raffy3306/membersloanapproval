@@ -1002,7 +1002,10 @@ export async function updateLoanRequest(
 
   const data = await toBackendLoanRequestPayload(payload);
   const result = unwrap(
-    await apiCall<RawRecord>(`/loan-requests/${encodeURIComponent(requestId)}`, 'PUT', data),
+    await apiCall<RawRecord>(`/loan-requests/${encodeURIComponent(requestId)}`, 'PUT', {
+      ...data,
+      status: 'Pending',
+    }),
   );
   const request = mapLoanRequest(result);
 

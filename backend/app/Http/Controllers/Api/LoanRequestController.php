@@ -246,6 +246,17 @@ class LoanRequestController extends BaseController
             'securities',
         ])->toArray();
 
+        // Saving an edited request resubmits it to the manager. Keep this rule on
+        // the server as well as in the client so returned requests cannot remain
+        // hidden in the teller's Returned state after their corrections are saved.
+        if (
+            $user &&
+            strtolower(trim((string) $user->role)) === 'teller' &&
+            $loanRequest->status === 'Returned'
+        ) {
+            $updateData['status'] = 'Pending';
+        }
+
         if (!empty($validated['cif_key'])) {
             $member = Member::where('cif_key', $validated['cif_key'])->first();
             $updateData['member_id'] = $member->id;
