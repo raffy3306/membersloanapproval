@@ -111,6 +111,11 @@ class BranchSeeder extends Seeder
 Place CSV files in `storage/app/imports/` directory.
 
 #### 4. Run Seeders
+Set a unique password of at least 12 characters in `.env` before creating the initial users:
+```env
+INITIAL_USER_PASSWORD=replace-with-a-unique-secret
+```
+
 ```bash
 php artisan db:seed
 ```

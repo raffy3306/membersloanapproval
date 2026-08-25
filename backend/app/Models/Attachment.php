@@ -16,6 +16,7 @@ class Attachment extends Model
         'original_filename',
         'stored_filename',
         'path',
+        'disk',
         'mime_type',
         'size',
         'uploaded_by',

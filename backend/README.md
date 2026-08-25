@@ -82,11 +82,12 @@ DB_PASSWORD=
 
 JWT_SECRET=your-secret-key-here
 CORS_ALLOWED_ORIGINS=http://localhost:5173,http://localhost:3000
+INITIAL_USER_PASSWORD=replace-with-a-unique-secret
 ```
 
 ## Requirements
 
-- PHP 8.1+
+- PHP 8.2+
 - Composer
 - MySQL 8.0+
 

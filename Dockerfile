@@ -42,6 +42,8 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/* \
     && a2enmod headers rewrite
 
+RUN echo "expose_php=Off" > /usr/local/etc/php/conf.d/security.ini
+
 COPY docker/apache.conf /etc/apache2/sites-available/000-default.conf
 
 RUN cat > /usr/local/bin/entrypoint.sh <<'SH'

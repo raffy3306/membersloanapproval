@@ -72,6 +72,11 @@ php artisan migrate
   - [ ] settings
 
 ### 7. (Optional) Seed Database
+Set a unique initial password of at least 12 characters in `backend/.env`:
+```env
+INITIAL_USER_PASSWORD=replace-with-a-unique-secret
+```
+
 ```bash
 php artisan db:seed
 ```
@@ -163,6 +168,8 @@ curl http://localhost:8000/api/health
 - [ ] Set `APP_ENV=production` in .env
 - [ ] Set `APP_DEBUG=false` in .env
 - [ ] Set strong `JWT_SECRET`
+- [ ] Set exact production `CORS_ALLOWED_ORIGINS` (do not use `*`)
+- [ ] Set `INITIAL_USER_PASSWORD` before any production seeding
 - [ ] Run `php artisan config:cache`
 - [ ] Run `php artisan route:cache`
 - [ ] Set proper file permissions

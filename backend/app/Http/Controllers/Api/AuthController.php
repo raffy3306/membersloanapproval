@@ -5,8 +5,12 @@ namespace App\Http\Controllers\Api;
 use App\Models\User;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Password;
+use Illuminate\Support\Str;
+use Illuminate\Auth\Events\PasswordReset;
 use Tymon\JWTAuth\Facades\JWTAuth;
 use Carbon\Carbon;
+use Throwable;
 
 class AuthController extends BaseController
 {
@@ -78,6 +82,68 @@ class AuthController extends BaseController
         return $this->success([
             'user' => $this->formatUser($user->fresh('branch')),
         ], 'Password changed successfully');
+    }
+
+    public function forgotPassword(Request $request)
+    {
+        $validated = $request->validate([
+            'email' => 'required|email',
+        ]);
+
+        $email = Str::lower(trim($validated['email']));
+
+        $user = User::where('email', $email)->first();
+
+        if (!$user) {
+            return $this->error('No account was found for that email address.', 404);
+        }
+
+        try {
+            Password::broker()->sendResetLink([
+                'email' => $email,
+            ]);
+        } catch (Throwable $exception) {
+            report($exception);
+            Password::broker()->deleteToken($user);
+
+            return $this->error('Unable to send the password reset email right now. Please try again later.', 502);
+        }
+
+        return $this->success([], 'Reset link was successfully sent. Please check your inbox or spam folder for the reset email. Thanks.');
+    }
+
+    public function resetPassword(Request $request)
+    {
+        $validated = $request->validate([
+            'token' => 'required|string',
+            'email' => 'required|email',
+            'password' => 'required|string|min:8|confirmed',
+            'password_confirmation' => 'required|string|min:8',
+        ]);
+
+        $status = Password::broker()->reset(
+            [
+                'email' => Str::lower(trim($validated['email'])),
+                'password' => $validated['password'],
+                'password_confirmation' => $validated['password_confirmation'],
+                'token' => $validated['token'],
+            ],
+            function (User $user, string $password) {
+                $user->forceFill([
+                    'password' => Hash::make($password),
+                    'first_login' => false,
+                    'remember_token' => Str::random(60),
+                ])->save();
+
+                event(new PasswordReset($user));
+            }
+        );
+
+        if ($status !== Password::PASSWORD_RESET) {
+            return $this->error('This password reset link is invalid or has expired.', 422);
+        }
+
+        return $this->success([], 'Your password has been reset. You can now sign in.');
     }
 
     private function formatUser($user)

@@ -13,6 +13,12 @@ class DatabaseSeeder extends Seeder
 {
     public function run(): void
     {
+        $initialUserPassword = (string) config('app.initial_user_password', '');
+
+        if (strlen($initialUserPassword) < 12) {
+            throw new \RuntimeException('INITIAL_USER_PASSWORD must be set to at least 12 characters before seeding users.');
+        }
+
         $this->call(MembersTableSeeder::class);
 
         $mainBranch = Branch::updateOrCreate(
@@ -72,10 +78,10 @@ class DatabaseSeeder extends Seeder
             ['email' => 'manager@example.com', 'role' => 'manager', 'fullname' => 'Sample Manager', 'position' => 'Manager'],
             ['email' => 'approver@example.com', 'role' => 'approver', 'fullname' => 'Sample Approver', 'position' => 'Approver'],
         ] as $user) {
-            User::updateOrCreate(
+            User::firstOrCreate(
                 ['email' => $user['email']],
                 $user + [
-                    'password' => Hash::make('password123'),
+                    'password' => Hash::make($initialUserPassword),
                     'branch_id' => $mainBranch->id,
                     'first_login' => true,
                     'status' => 'ACTIVE',

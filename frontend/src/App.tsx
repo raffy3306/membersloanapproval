@@ -93,6 +93,7 @@ import {
   loginUser,
   returnLoanRequest,
   returnLoanRequestToManager,
+  resetPassword,
   saveBranch,
   searchMembers,
   sendPasswordRecovery,
@@ -127,7 +128,35 @@ const memberCsvHeaders: Array<keyof Member> = [
 const memberImportBatchSize = 500;
 const userImportBatchSize = 500;
 const adminPageSize = 15;
+const loanPageSize = 10;
 const exportPageSize = 100;
+
+function toDateInputValueFromParts(year: number, month: number, day: number) {
+  return [year, String(month).padStart(2, '0'), String(day).padStart(2, '0')].join('-');
+}
+
+function getCurrentMonthDateRange() {
+  const today = new Date();
+  const year = today.getFullYear();
+  const month = today.getMonth() + 1;
+  const lastDay = new Date(year, month, 0).getDate();
+
+  return {
+    dateFrom: toDateInputValueFromParts(year, month, 1),
+    dateTo: toDateInputValueFromParts(year, month, lastDay),
+  };
+}
+
+function useDebouncedValue<T>(value: T, delayMs: number) {
+  const [debouncedValue, setDebouncedValue] = useState(value);
+
+  useEffect(() => {
+    const timeoutId = window.setTimeout(() => setDebouncedValue(value), delayMs);
+    return () => window.clearTimeout(timeoutId);
+  }, [delayMs, value]);
+
+  return debouncedValue;
+}
 
 type MemberImportField = keyof Member | 'first_name' | 'last_name';
 type MemberImportRow = Partial<Member> & {
@@ -854,6 +883,11 @@ type LoginPageProps = {
   onLoginSuccess: (user: AuthenticatedUser) => void;
 };
 
+type PasswordResetRequest = {
+  email: string;
+  token: string;
+};
+
 type FirstLoginPasswordChangeProps = {
   activeStatus: StatusCopy;
   connectionState: BackendConnectionState;
@@ -1129,6 +1163,7 @@ const securityFields: Array<{
 
 function App() {
   const pageKind = useMemo(() => getCurrentPageKind(), []);
+  const passwordResetRequest = useMemo(() => getPasswordResetRequest(), []);
   const [currentUser, setCurrentUser] = useState<AuthenticatedUser | null>(() =>
     loadStoredUser(),
   );
@@ -1205,6 +1240,10 @@ function App() {
       window.location.assign('/');
     }
   };
+
+  if (passwordResetRequest) {
+    return <ResetPasswordPage request={passwordResetRequest} />;
+  }
 
   if (!currentUser) {
     return (
@@ -1287,6 +1326,9 @@ function LoginPage({
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [loginError, setLoginError] = useState('');
   const [showPassword, setShowPassword] = useState(false);
+  const [isRecoveringPassword, setIsRecoveringPassword] = useState(false);
+  const [recoveryEmail, setRecoveryEmail] = useState('');
+  const [recoveryMessage, setRecoveryMessage] = useState('');
   const [useBrandLogoImage, setUseBrandLogoImage] = useState(true);
 
   const canSubmit =
@@ -1316,20 +1358,18 @@ function LoginPage({
 
   const sendPasswordRecoveryEmail = async (userEmail: string) => {
     setLoginError('');
+    setRecoveryMessage('');
+    setIsSubmitting(true);
 
     try {
       const result = await sendPasswordRecovery(userEmail);
-
-      if (!result.success) {
-        setLoginError(result.message || 'Password recovery email was not sent.');
-        return;
-      }
-
-      alert(result.message || 'Password recovery email has been sent to ' + userEmail + '. Please check your email.');
+      setRecoveryMessage(result.message || 'Reset link was successfully sent. Please check your inbox or spam folder for the reset email. Thanks.');
     } catch (error) {
       const errorMessage = getErrorMessage(error);
       console.error('Password recovery error:', errorMessage);
-      setLoginError(`Failed to send recovery email: ${errorMessage}`);
+      setLoginError(errorMessage);
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -1415,10 +1455,58 @@ function LoginPage({
           <div className="panel-heading login-panel-heading">
             <div>
               <p className="eyebrow">Secure Access</p>
-              <h2 id="login-title">User Login</h2>
+              <h2 id="login-title">{isRecoveringPassword ? 'Forgot Password' : 'User Login'}</h2>
             </div>
           </div>
 
+          {isRecoveringPassword ? (
+          <form
+            className="login-form"
+            onSubmit={(event) => {
+              event.preventDefault();
+              void sendPasswordRecoveryEmail(recoveryEmail.trim());
+            }}
+          >
+            <p className="login-form-copy">
+              Enter your registered email address. If the account exists, we will send a secure reset link.
+            </p>
+            <label htmlFor="recovery-email">Email Address</label>
+            <div className="input-shell">
+              <Mail size={18} aria-hidden="true" />
+              <input
+                autoComplete="email"
+                id="recovery-email"
+                inputMode="email"
+                onChange={(event) => setRecoveryEmail(event.target.value)}
+                placeholder="name@example.com"
+                required
+                type="email"
+                value={recoveryEmail}
+              />
+            </div>
+            {loginError ? <p className="error-text">{loginError}</p> : null}
+            {recoveryMessage ? <p className="notice-text">{recoveryMessage}</p> : null}
+            {!recoveryMessage ? (
+              <button className="primary-button" type="submit" disabled={!recoveryEmail.trim() || isSubmitting}>
+                <Send size={18} aria-hidden="true" />
+                {isSubmitting ? 'Sending Link' : 'Send Reset Link'}
+              </button>
+            ) : null}
+            <div className="forgot-password-section">
+              <button
+                className="text-button"
+                type="button"
+                onClick={() => {
+                  setIsRecoveringPassword(false);
+                  setLoginError('');
+                  setRecoveryMessage('');
+                }}
+              >
+                Back to Sign In
+              </button>
+            </div>
+          </form>
+          ) : (
           <form className="login-form" onSubmit={handleSubmit}>
             <label htmlFor="email">Email Address</label>
             <div className="input-shell">
@@ -1477,17 +1565,124 @@ function LoginPage({
                 className="text-button"
                 type="button"
                 onClick={() => {
-                  const userEmail = prompt('Enter your email address to receive password recovery instructions:');
-                  if (userEmail) {
-                    sendPasswordRecoveryEmail(userEmail.trim());
-                  }
+                  setRecoveryEmail(email.trim());
+                  setLoginError('');
+                  setRecoveryMessage('');
+                  setIsRecoveringPassword(true);
                 }}
               >
                 Forgot Password?
               </button>
             </div>
           </form>
+          )}
         </section>
+      </section>
+    </main>
+  );
+}
+
+function ResetPasswordPage({ request }: { request: PasswordResetRequest }) {
+  const [password, setPassword] = useState('');
+  const [confirmation, setConfirmation] = useState('');
+  const [formError, setFormError] = useState('');
+  const [successMessage, setSuccessMessage] = useState('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [showPasswords, setShowPasswords] = useState(false);
+  const canSubmit = password.length >= 8 && confirmation.length >= 8 && !isSubmitting;
+
+  const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setFormError('');
+    setSuccessMessage('');
+
+    if (password !== confirmation) {
+      setFormError('New password and confirmation do not match.');
+      return;
+    }
+
+    setIsSubmitting(true);
+
+    try {
+      const result = await resetPassword({
+        email: request.email,
+        token: request.token,
+        password,
+      });
+      setSuccessMessage(result.message || 'Your password has been reset. You can now sign in.');
+      window.history.replaceState({}, document.title, window.location.pathname);
+    } catch (error) {
+      setFormError(getErrorMessage(error));
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  return (
+    <main className="password-reset-shell">
+      <section className="login-panel password-reset-panel" aria-labelledby="reset-password-title">
+        <div className="login-avatar" aria-hidden="true">
+          <LockKeyhole size={58} />
+        </div>
+        <div className="panel-heading login-panel-heading">
+          <div>
+            <p className="eyebrow">Secure Access</p>
+            <h2 id="reset-password-title">Reset Password</h2>
+          </div>
+        </div>
+
+        {successMessage ? (
+          <div className="login-form">
+            <p className="notice-text">{successMessage}</p>
+            <a className="primary-button password-reset-link" href="/">Return to Sign In</a>
+          </div>
+        ) : (
+          <form className="login-form" onSubmit={handleSubmit}>
+            <p className="login-form-copy">Resetting password for <strong>{request.email}</strong></p>
+            <label htmlFor="reset-password">New Password</label>
+            <div className="input-shell">
+              <LockKeyhole size={18} aria-hidden="true" />
+              <input
+                autoComplete="new-password"
+                id="reset-password"
+                minLength={8}
+                onChange={(event) => setPassword(event.target.value)}
+                required
+                type={showPasswords ? 'text' : 'password'}
+                value={password}
+              />
+              <button
+                className="icon-button"
+                type="button"
+                onClick={() => setShowPasswords((value) => !value)}
+                aria-label={showPasswords ? 'Hide passwords' : 'Show passwords'}
+              >
+                {showPasswords ? <EyeOff size={18} aria-hidden="true" /> : <Eye size={18} aria-hidden="true" />}
+              </button>
+            </div>
+            <label htmlFor="reset-password-confirmation">Confirm New Password</label>
+            <div className="input-shell">
+              <LockKeyhole size={18} aria-hidden="true" />
+              <input
+                autoComplete="new-password"
+                id="reset-password-confirmation"
+                minLength={8}
+                onChange={(event) => setConfirmation(event.target.value)}
+                required
+                type={showPasswords ? 'text' : 'password'}
+                value={confirmation}
+              />
+            </div>
+            {formError ? <p className="error-text">{formError}</p> : null}
+            <button className="primary-button" type="submit" disabled={!canSubmit}>
+              <Save size={18} aria-hidden="true" />
+              {isSubmitting ? 'Resetting Password' : 'Reset Password'}
+            </button>
+            <div className="forgot-password-section">
+              <a className="text-button" href="/">Back to Sign In</a>
+            </div>
+          </form>
+        )}
       </section>
     </main>
   );
@@ -1674,6 +1869,71 @@ function FirstLoginPasswordChange({
   );
 }
 
+function DateRangeFilter({
+  dateFrom,
+  dateTo,
+  clientName,
+  disabled = false,
+  onClientNameChange,
+  onDateFromChange,
+  onDateToChange,
+  onApply,
+}: {
+  dateFrom: string;
+  dateTo: string;
+  clientName: string;
+  disabled?: boolean;
+  onClientNameChange: (value: string) => void;
+  onDateFromChange: (value: string) => void;
+  onDateToChange: (value: string) => void;
+  onApply: () => void;
+}) {
+  return (
+    <div className="date-filter-bar" aria-label="Request date filters">
+      <label className="date-filter-field client-name-filter-field">
+        <span>Client Name</span>
+        <input
+          type="search"
+          value={clientName}
+          maxLength={100}
+          placeholder="Starts with client name..."
+          disabled={disabled}
+          onChange={(event) => onClientNameChange(event.target.value)}
+        />
+      </label>
+      <label className="date-filter-field">
+        <span>Date From</span>
+        <input
+          type="date"
+          value={dateFrom}
+          max={dateTo}
+          disabled={disabled}
+          onChange={(event) => onDateFromChange(event.target.value)}
+        />
+      </label>
+      <label className="date-filter-field">
+        <span>Date To</span>
+        <input
+          type="date"
+          value={dateTo}
+          min={dateFrom}
+          disabled={disabled}
+          onChange={(event) => onDateToChange(event.target.value)}
+        />
+      </label>
+      <button
+        className="secondary-button inline-button date-filter-reset"
+        type="button"
+        onClick={onApply}
+        disabled={disabled}
+      >
+        <CheckCircle2 size={16} aria-hidden="true" />
+        Apply
+      </button>
+    </div>
+  );
+}
+
 function Pagination({
   pagination,
   onPageChange,
@@ -1827,9 +2087,16 @@ function AdminDashboard({
 }
 
 function AdminAuditLogs() {
+  const initialDateRange = useMemo(getCurrentMonthDateRange, []);
   const [requests, setRequests] = useState<LoanRequest[]>([]);
   const [pagination, setPagination] = useState<PaginationInfo | undefined>();
   const [currentPage, setCurrentPage] = useState(1);
+  const [dateFrom, setDateFrom] = useState(initialDateRange.dateFrom);
+  const [dateTo, setDateTo] = useState(initialDateRange.dateTo);
+  const [appliedDateFrom, setAppliedDateFrom] = useState(initialDateRange.dateFrom);
+  const [appliedDateTo, setAppliedDateTo] = useState(initialDateRange.dateTo);
+  const [clientName, setClientName] = useState('');
+  const debouncedClientName = useDebouncedValue(clientName, 300);
   const [isLoading, setIsLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
   const [sheetConfigured, setSheetConfigured] = useState(true);
@@ -1842,7 +2109,13 @@ function AdminAuditLogs() {
       setIsLoading(true);
 
       try {
-        const result = await listAuditLogs(currentPage, adminPageSize);
+        const result = await listAuditLogs(
+          currentPage,
+          loanPageSize,
+          appliedDateFrom,
+          appliedDateTo,
+          debouncedClientName,
+        );
 
         if (!isCurrent) {
           return;
@@ -1869,7 +2142,7 @@ function AdminAuditLogs() {
     return () => {
       isCurrent = false;
     };
-  }, [currentPage]);
+  }, [currentPage, appliedDateFrom, appliedDateTo, debouncedClientName]);
 
   if (errorMessage) {
     return <p className="error-text">{errorMessage}</p>;
@@ -1877,6 +2150,35 @@ function AdminAuditLogs() {
 
   return (
     <div className="admin-stack">
+      <DateRangeFilter
+        dateFrom={dateFrom}
+        dateTo={dateTo}
+        clientName={clientName}
+        disabled={isLoading}
+        onClientNameChange={(value) => {
+          setClientName(value);
+          setCurrentPage(1);
+        }}
+        onApply={() => {
+          setAppliedDateFrom(dateFrom);
+          setAppliedDateTo(dateTo);
+          setCurrentPage(1);
+        }}
+        onDateFromChange={(value) => {
+          const nextValue = value || getCurrentMonthDateRange().dateFrom;
+          setDateFrom(nextValue);
+          if (dateTo < nextValue) {
+            setDateTo(nextValue);
+          }
+        }}
+        onDateToChange={(value) => {
+          const nextValue = value || getCurrentMonthDateRange().dateTo;
+          setDateTo(nextValue);
+          if (dateFrom > nextValue) {
+            setDateFrom(nextValue);
+          }
+        }}
+      />
       <div className="admin-table" role="table" aria-label="Audit logs">
         <div className="admin-row admin-head" role="row">
           <span role="columnheader">Request ID</span>
@@ -3988,11 +4290,13 @@ function AdminUserForm({
         <label className="field-control">
           <span>{isNew ? 'Password' : 'New Password'}</span>
           <input
-            type="text"
+            type="password"
             value={form.password || ''}
             onChange={(event) => updateField('password', event.target.value)}
-            placeholder={isNew ? 'Default password' : 'Leave blank to keep current'}
+            placeholder={isNew ? 'At least 8 characters' : 'Leave blank to keep current'}
+            minLength={8}
             required={isNew}
+            autoComplete="new-password"
           />
         </label>
         <label className="field-control">
@@ -4226,9 +4530,17 @@ function Dashboard({
   user,
 }: DashboardProps) {
   const config = dashboardConfigs[dashboard];
+  const initialDateRange = useMemo(getCurrentMonthDateRange, []);
   const [activeView, setActiveView] = useState<DashboardView>(
     config.menus[0].id,
   );
+  const [currentPage, setCurrentPage] = useState(1);
+  const [dateFrom, setDateFrom] = useState(initialDateRange.dateFrom);
+  const [dateTo, setDateTo] = useState(initialDateRange.dateTo);
+  const [appliedDateFrom, setAppliedDateFrom] = useState(initialDateRange.dateFrom);
+  const [appliedDateTo, setAppliedDateTo] = useState(initialDateRange.dateTo);
+  const [clientName, setClientName] = useState('');
+  const debouncedClientName = useDebouncedValue(clientName, 300);
   const [showRequestForm, setShowRequestForm] = useState(false);
   const [viewedRequest, setViewedRequest] = useState<LoanRequest | null>(null);
   const [editingRequest, setEditingRequest] = useState<LoanRequest | null>(null);
@@ -4238,19 +4550,32 @@ function Dashboard({
   } | null>(null);
   const [requestActionError, setRequestActionError] = useState('');
   const [refreshToken, setRefreshToken] = useState(0);
-  const { isLoading, requestError, requests, sheetConfigured } =
-    useLoanRequests(user, dashboard, activeView, refreshToken);
+  const { isLoading, pagination, requestError, requests, sheetConfigured } =
+    useLoanRequests(
+      user,
+      dashboard,
+      activeView,
+      refreshToken,
+      currentPage,
+      appliedDateFrom,
+      appliedDateTo,
+      debouncedClientName,
+    );
 
   useEffect(() => {
     setActiveView(config.menus[0].id);
   }, [config.menus]);
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [activeView, dashboard, appliedDateFrom, appliedDateTo, debouncedClientName]);
 
   const activeMenu =
     config.menus.find((menu) => menu.id === activeView) || config.menus[0];
   const summaryCards = getSummaryCards({
     activeMenu,
     dashboard,
-    requests,
+    totalRequests: pagination?.total ?? requests.length,
     sheetConfigured,
     user,
   });
@@ -4261,6 +4586,7 @@ function Dashboard({
     setShowRequestForm(false);
     setEditingRequest(null);
     setActiveView('pending');
+    setCurrentPage(1);
     setRefreshToken((value) => value + 1);
   };
 
@@ -4285,6 +4611,7 @@ function Dashboard({
         notes,
       });
       setViewedRequest(null);
+      setCurrentPage(1);
       setRefreshToken((value) => value + 1);
     } catch (error) {
       setRequestActionError(getErrorMessage(error));
@@ -4317,6 +4644,7 @@ function Dashboard({
         notes,
       });
       setViewedRequest(null);
+      setCurrentPage(1);
       setRefreshToken((value) => value + 1);
     } catch (error) {
       setRequestActionError(getErrorMessage(error));
@@ -4363,6 +4691,7 @@ function Dashboard({
         additionalRequirements,
       });
       setViewedRequest(null);
+      setCurrentPage(1);
       setRefreshToken((value) => value + 1);
     } catch (error) {
       setRequestActionError(getErrorMessage(error));
@@ -4404,6 +4733,7 @@ function Dashboard({
         notes: approverNotes,
       });
       setViewedRequest(null);
+      setCurrentPage(1);
       setRefreshToken((value) => value + 1);
     } catch (error) {
       setRequestActionError(getErrorMessage(error));
@@ -4438,6 +4768,7 @@ function Dashboard({
         notes,
       });
       setViewedRequest(null);
+      setCurrentPage(1);
       setRefreshToken((value) => value + 1);
     } catch (error) {
       setRequestActionError(getErrorMessage(error));
@@ -4555,7 +4886,9 @@ function Dashboard({
               ) : null}
               {!isMembersView ? (
                 <span className="count-chip">
-                  {isLoading ? 'Loading' : `${requests.length} records`}
+                  {isLoading
+                    ? 'Loading'
+                    : `${pagination?.total ?? requests.length} records`}
                 </span>
               ) : null}
             </div>
@@ -4573,12 +4906,39 @@ function Dashboard({
           ) : (
             <>
               {requestError ? <p className="error-text">{requestError}</p> : null}
+              <DateRangeFilter
+                dateFrom={dateFrom}
+                dateTo={dateTo}
+                clientName={clientName}
+                disabled={isLoading}
+                onClientNameChange={setClientName}
+                onApply={() => {
+                  setAppliedDateFrom(dateFrom);
+                  setAppliedDateTo(dateTo);
+                  setCurrentPage(1);
+                }}
+                onDateFromChange={(value) => {
+                  const nextValue = value || getCurrentMonthDateRange().dateFrom;
+                  setDateFrom(nextValue);
+                  if (dateTo < nextValue) {
+                    setDateTo(nextValue);
+                  }
+                }}
+                onDateToChange={(value) => {
+                  const nextValue = value || getCurrentMonthDateRange().dateTo;
+                  setDateTo(nextValue);
+                  if (dateFrom > nextValue) {
+                    setDateFrom(nextValue);
+                  }
+                }}
+              />
               <RequestTable
                 isLoading={isLoading}
                 requests={requests}
                 sheetConfigured={sheetConfigured}
                 onViewRequest={setViewedRequest}
               />
+              <Pagination pagination={pagination} onPageChange={setCurrentPage} />
             </>
           )}
         </section>
@@ -4804,29 +5164,49 @@ function NewRequestForm({
     !isLoadingEditingRequest &&
     !isSubmitting;
 
-  const handleMemberSearch = useCallback(async (query: string) => {
-    if (!query.trim()) {
+  useEffect(() => {
+    const query = request.fullname.trim();
+
+    if (query.length < 2) {
       setMemberSearchResults([]);
       setShowMemberDropdown(false);
-      return;
+      setIsSearchingMembers(false);
+      return undefined;
     }
 
-    setIsSearchingMembers(true);
-    try {
-      const response = await searchMembers({ query });
-      setMemberSearchResults(response.members || []);
-      setShowMemberDropdown(response.members.length > 0);
-      if (response.members.length === 0) {
-        console.log(`No members found matching: ${query}`);
+    let isCurrent = true;
+    const timeoutId = window.setTimeout(async () => {
+      setIsSearchingMembers(true);
+
+      try {
+        const response = await searchMembers({ query });
+
+        if (!isCurrent) {
+          return;
+        }
+
+        setMemberSearchResults(response.members || []);
+        setShowMemberDropdown(response.members.length > 0);
+      } catch (error) {
+        if (!isCurrent) {
+          return;
+        }
+
+        console.error('Error searching members:', error);
+        setMemberSearchResults([]);
+        setShowMemberDropdown(false);
+      } finally {
+        if (isCurrent) {
+          setIsSearchingMembers(false);
+        }
       }
-    } catch (error) {
-      console.error('Error searching members:', error);
-      setMemberSearchResults([]);
-      setShowMemberDropdown(false);
-    } finally {
-      setIsSearchingMembers(false);
-    }
-  }, []);
+    }, 300);
+
+    return () => {
+      isCurrent = false;
+      window.clearTimeout(timeoutId);
+    };
+  }, [request.fullname]);
 
   const handleSelectMember = useCallback((member: Member) => {
     setRequest((current) => ({
@@ -4851,9 +5231,6 @@ function NewRequestForm({
       [name]: value,
     }));
 
-    if (name === 'fullname') {
-      handleMemberSearch(value);
-    }
   };
 
   const handleComakerChange = (
@@ -6866,8 +7243,13 @@ function useLoanRequests(
   dashboard: DashboardKind,
   view: DashboardView,
   refreshToken: number,
+  page: number,
+  dateFrom: string,
+  dateTo: string,
+  clientName: string,
 ) {
   const [requests, setRequests] = useState<LoanRequest[]>([]);
+  const [pagination, setPagination] = useState<PaginationInfo | undefined>();
   const [isLoading, setIsLoading] = useState(false);
   const [requestError, setRequestError] = useState('');
   const [sheetConfigured, setSheetConfigured] = useState(true);
@@ -6881,12 +7263,14 @@ function useLoanRequests(
 
       if (!requestView) {
         setRequests([]);
+        setPagination(undefined);
         setIsLoading(false);
         return;
       }
 
       if (!hasLaravelApiUrl) {
         setRequests([]);
+        setPagination(undefined);
         setSheetConfigured(false);
         return;
       }
@@ -6897,7 +7281,12 @@ function useLoanRequests(
         const result = await listLoanRequests({
           branchid: user.branchid,
           dashboard,
+          dateFrom,
+          dateTo,
+          clientName,
           email: user.email,
+          page,
+          perPage: loanPageSize,
           view: requestView,
         });
 
@@ -6906,6 +7295,7 @@ function useLoanRequests(
         }
 
         setRequests(sortLoanRequestsNewestFirst(result.requests));
+        setPagination(result.pagination);
         setSheetConfigured(result.sheetConfigured);
       } catch (error) {
         if (!isCurrent) {
@@ -6913,6 +7303,7 @@ function useLoanRequests(
         }
 
         setRequests([]);
+        setPagination(undefined);
         setRequestError(getErrorMessage(error));
       } finally {
         if (isCurrent) {
@@ -6926,10 +7317,11 @@ function useLoanRequests(
     return () => {
       isCurrent = false;
     };
-  }, [dashboard, refreshToken, user.branchid, user.email, view]);
+  }, [clientName, dashboard, dateFrom, dateTo, page, refreshToken, user.branchid, user.email, view]);
 
   return {
     isLoading,
+    pagination,
     requestError,
     requests,
     sheetConfigured,
@@ -6939,21 +7331,21 @@ function useLoanRequests(
 function getSummaryCards({
   activeMenu,
   dashboard,
-  requests,
   sheetConfigured,
+  totalRequests,
   user,
 }: {
   activeMenu: DashboardMenu;
   dashboard: DashboardKind;
-  requests: LoanRequest[];
   sheetConfigured: boolean;
+  totalRequests: number;
   user: AuthenticatedUser;
 }) {
   return [
     {
       icon: activeMenu.icon,
       label: activeMenu.label,
-      value: String(requests.length),
+      value: String(totalRequests),
     },
     {
       icon: UsersRound,
@@ -6993,6 +7385,14 @@ function getCurrentPageKind(): PageKind {
   }
 
   return 'login';
+}
+
+function getPasswordResetRequest(): PasswordResetRequest | null {
+  const params = new URLSearchParams(window.location.search);
+  const token = params.get('token')?.trim() || '';
+  const email = params.get('email')?.trim() || '';
+
+  return token && email ? { token, email } : null;
 }
 
 function getDashboardForUser(user: AuthenticatedUser): UserDashboardKind {

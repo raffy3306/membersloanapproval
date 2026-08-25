@@ -8,6 +8,7 @@ use App\Models\Comaker;
 use App\Models\LoanType;
 use App\Models\OtherLoan;
 use App\Models\Security;
+use Carbon\CarbonImmutable;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
@@ -17,58 +18,86 @@ class LoanRequestController extends BaseController
     public function index(Request $request)
     {
         $validated = $request->validate([
-            'dashboard' => 'required|in:teller,manager,approver,admin',
+            'dashboard' => 'nullable|in:teller,manager,approver,admin',
             'view' => 'required|in:pending,history',
-            'email' => 'required|email',
-            'branchid' => 'required',
+            'email' => 'nullable|email',
+            'branchid' => 'nullable',
+            'date_from' => 'nullable|date_format:Y-m-d',
+            'date_to' => 'nullable|date_format:Y-m-d|after_or_equal:date_from',
+            'client_name' => 'nullable|string|max:100',
+            'page' => 'nullable|integer|min:1',
+            'per_page' => 'nullable|integer|min:1|max:100',
         ]);
 
-        $user = auth('api')->user();
-        $query = LoanRequest::with(['member', 'loanType', 'branch', 'requestedBy', 'manager', 'approver']);
+        $user = $request->user();
+        $dashboard = $this->dashboardForUser($user);
+        [$dateFrom, $dateTo] = $this->resolveDateRange($validated);
+        $query = $this->summaryQuery()
+            ->whereBetween('request_date', [$dateFrom, $dateTo]);
+        $this->applyClientNameFilter($query, $validated['client_name'] ?? null);
 
-        if ($validated['dashboard'] === 'teller') {
+        if ($dashboard === 'teller') {
             $query->where('requested_by', $user->id);
             if ($validated['view'] === 'pending') {
                 $query->whereIn('status', ['Pending', 'Returned']);
             }
-        } elseif ($validated['dashboard'] === 'manager') {
+        } elseif ($dashboard === 'manager') {
+            if (is_null($user->branch_id)) {
+                $query->whereRaw('1 = 0');
+            } else {
+                $query->where('branch_id', $user->branch_id);
+            }
             if ($validated['view'] === 'pending') {
                 $query->whereIn('status', ['Pending', 'Returned to Manager']);
             }
-        } elseif ($validated['dashboard'] === 'approver') {
+        } elseif ($dashboard === 'approver') {
             if ($validated['view'] === 'pending') {
                 $query->where('status', 'Forwarded');
             }
-        } elseif ($validated['dashboard'] === 'admin') {
+        } elseif ($dashboard === 'admin') {
             // Admin sees all records.
         }
 
-        $requests = $query->orderByDesc('request_date')->get();
+        $perPage = (int) ($validated['per_page'] ?? 10);
+        $paginated = $query
+            ->orderByDesc('request_date')
+            ->orderByDesc('id')
+            ->paginate($perPage, ['*'], 'page', (int) ($validated['page'] ?? 1));
 
         return $this->success([
-            'requests' => $requests,
+            'requests' => $paginated->items(),
+            'pagination' => $this->paginationData($paginated),
+            'filters' => $this->filterData($dateFrom, $dateTo, $validated['client_name'] ?? null),
             'sheetConfigured' => true,
         ]);
     }
 
     public function audit(Request $request)
     {
-        $page = max(1, (int)$request->query('page', 1));
-        $perPage = min(max(1, (int)$request->query('per_page', 15)), 100);
+        $validated = $request->validate([
+            'date_from' => 'nullable|date_format:Y-m-d',
+            'date_to' => 'nullable|date_format:Y-m-d|after_or_equal:date_from',
+            'client_name' => 'nullable|string|max:100',
+            'page' => 'nullable|integer|min:1',
+            'per_page' => 'nullable|integer|min:1|max:100',
+        ]);
+        $page = (int) ($validated['page'] ?? 1);
+        $perPage = (int) ($validated['per_page'] ?? 10);
+        [$dateFrom, $dateTo] = $this->resolveDateRange($validated);
 
-        $paginated = LoanRequest::with(['member', 'loanType', 'branch', 'requestedBy', 'manager', 'approver'])
+        $query = $this->summaryQuery()
+            ->whereBetween('request_date', [$dateFrom, $dateTo]);
+        $this->applyClientNameFilter($query, $validated['client_name'] ?? null);
+
+        $paginated = $query
             ->orderByDesc('request_date')
+            ->orderByDesc('id')
             ->paginate($perPage, ['*'], 'page', $page);
 
         return $this->success([
             'requests' => $paginated->items(),
-            'pagination' => [
-                'page' => $paginated->currentPage(),
-                'per_page' => $paginated->perPage(),
-                'total' => $paginated->total(),
-                'last_page' => $paginated->lastPage(),
-                'has_more' => $paginated->hasMorePages(),
-            ],
+            'pagination' => $this->paginationData($paginated),
+            'filters' => $this->filterData($dateFrom, $dateTo, $validated['client_name'] ?? null),
             'sheetConfigured' => true,
         ]);
     }
@@ -171,6 +200,10 @@ class LoanRequestController extends BaseController
             return $this->error('Loan request not found', 404);
         }
 
+        if (!$this->canAccessLoanRequest(request()->user(), $loanRequest)) {
+            return $this->error('You do not have permission to view this loan request.', 403);
+        }
+
         return $this->success($loanRequest->load([
             'member',
             'loanType',
@@ -194,6 +227,10 @@ class LoanRequestController extends BaseController
         }
 
         $user = auth('api')->user();
+
+        if (!$this->canAccessLoanRequest($user, $loanRequest)) {
+            return $this->error('You do not have permission to update this loan request.', 403);
+        }
 
         $validated = $request->validate([
             'status' => 'nullable|in:Pending,Forwarded,Returned,Returned to Manager,Approved,Disapproved,Rejected',
@@ -223,6 +260,35 @@ class LoanRequestController extends BaseController
             'other_loans' => 'nullable|array',
             'securities' => 'nullable|array',
         ]);
+
+        $disallowedFields = array_diff(
+            array_keys($validated),
+            $this->allowedUpdateFields($user)
+        );
+
+        if ($disallowedFields !== []) {
+            return $this->error('Your role cannot update one or more submitted loan fields.', 403);
+        }
+
+        if (!$this->canTransitionStatus($user, $loanRequest->status, $validated['status'] ?? null)) {
+            return $this->error('The requested loan status transition is not allowed for your role.', 422);
+        }
+
+        if ($this->dashboardForUser($user) === 'teller') {
+            if (is_null($user->branch_id)) {
+                return $this->error('Your teller account does not have an assigned branch.', 422);
+            }
+
+            $selectedMember = !empty($validated['cif_key'])
+                ? Member::where('cif_key', $validated['cif_key'])->first()
+                : $loanRequest->member;
+
+            if (!$selectedMember || (int) $selectedMember->branch_id !== (int) $user->branch_id) {
+                return $this->error('The selected member does not belong to your branch.', 422);
+            }
+
+            $validated['branch_id'] = (int) $user->branch_id;
+        }
 
         if (($validated['status'] ?? null) === 'Approved') {
             if (trim((string) ($validated['review_and_recommendations'] ?? '')) === '') {
@@ -333,6 +399,182 @@ class LoanRequestController extends BaseController
         return LoanRequest::where('id', $id)
             ->orWhere('request_id', $id)
             ->first();
+    }
+
+    private function summaryQuery()
+    {
+        return LoanRequest::query()
+            ->select([
+                'id',
+                'request_id',
+                'request_date',
+                'member_id',
+                'loan_type_id',
+                'branch_id',
+                'amount_applied',
+                'status',
+                'requested_by',
+                'manager_id',
+                'approver_id',
+                'manager_notes',
+                'approver_notes',
+                'review_and_recommendations',
+                'date_of_approval',
+                'loan_amount_approved',
+                'additional_requirements',
+                'recommendation',
+            ])
+            ->with([
+                'member:id,fullname',
+                'loanType:id,loan_type_name',
+                'branch:id,branch_name',
+                'requestedBy:id,email,fullname',
+                'manager:id,email,fullname',
+                'approver:id,email,fullname',
+            ]);
+    }
+
+    private function resolveDateRange(array $validated): array
+    {
+        $now = CarbonImmutable::now(config('app.timezone'));
+        $dateFrom = isset($validated['date_from'])
+            ? CarbonImmutable::createFromFormat('Y-m-d', $validated['date_from'], config('app.timezone'))->startOfDay()
+            : $now->startOfMonth()->startOfDay();
+        $dateTo = isset($validated['date_to'])
+            ? CarbonImmutable::createFromFormat('Y-m-d', $validated['date_to'], config('app.timezone'))->endOfDay()
+            : $now->endOfMonth()->endOfDay();
+
+        return [$dateFrom, $dateTo];
+    }
+
+    private function paginationData($paginated): array
+    {
+        return [
+            'page' => $paginated->currentPage(),
+            'per_page' => $paginated->perPage(),
+            'total' => $paginated->total(),
+            'last_page' => $paginated->lastPage(),
+            'has_more' => $paginated->hasMorePages(),
+        ];
+    }
+
+    private function applyClientNameFilter($query, ?string $clientName): void
+    {
+        $clientName = trim((string) $clientName);
+
+        if ($clientName === '') {
+            return;
+        }
+
+        $prefixSearch = addcslashes($clientName, '\\%_') . '%';
+        $query->whereHas('member', function ($memberQuery) use ($prefixSearch): void {
+            $memberQuery->where('fullname', 'like', $prefixSearch);
+        });
+    }
+
+    private function filterData(
+        CarbonImmutable $dateFrom,
+        CarbonImmutable $dateTo,
+        ?string $clientName
+    ): array
+    {
+        return [
+            'date_from' => $dateFrom->toDateString(),
+            'date_to' => $dateTo->toDateString(),
+            'client_name' => trim((string) $clientName),
+        ];
+    }
+
+    private function dashboardForUser($user): string
+    {
+        $role = strtolower(trim((string) $user?->role));
+
+        if ($role === 'branch_manager') {
+            return 'manager';
+        }
+
+        return in_array($role, ['manager', 'approver', 'admin'], true) ? $role : 'teller';
+    }
+
+    private function canAccessLoanRequest($user, LoanRequest $loanRequest): bool
+    {
+        $role = $this->dashboardForUser($user);
+
+        return match ($role) {
+            'admin', 'approver' => true,
+            'manager' => !is_null($user?->branch_id)
+                && (int) $loanRequest->branch_id === (int) $user->branch_id,
+            default => (int) $loanRequest->requested_by === (int) $user?->id,
+        };
+    }
+
+    private function allowedUpdateFields($user): array
+    {
+        $tellerFields = [
+            'status',
+            'cif_key',
+            'loan_type_id',
+            'branch_id',
+            'amount_applied',
+            'request_date',
+            'loan_balance',
+            'employer',
+            'position',
+            'employers_address',
+            'monthly_pension',
+            'current_nthp',
+            'analysis_nthp',
+            'share_capital',
+            'date_of_retirement',
+            'appraisal_result',
+            'recommendation',
+            'comakers',
+            'other_loans',
+            'securities',
+        ];
+
+        return match ($this->dashboardForUser($user)) {
+            'admin' => array_merge($tellerFields, [
+                'manager_notes',
+                'approver_notes',
+                'review_and_recommendations',
+                'date_of_approval',
+                'loan_amount_approved',
+                'additional_requirements',
+            ]),
+            'manager' => ['status', 'manager_notes'],
+            'approver' => [
+                'status',
+                'approver_notes',
+                'review_and_recommendations',
+                'loan_amount_approved',
+                'additional_requirements',
+            ],
+            default => $tellerFields,
+        };
+    }
+
+    private function canTransitionStatus($user, string $currentStatus, ?string $nextStatus): bool
+    {
+        $role = $this->dashboardForUser($user);
+
+        if ($role === 'admin') {
+            return true;
+        }
+
+        if ($nextStatus === null) {
+            return $role !== 'teller' || in_array($currentStatus, ['Pending', 'Returned'], true);
+        }
+
+        return match ($role) {
+            'teller' => in_array($currentStatus, ['Pending', 'Returned'], true)
+                && $nextStatus === 'Pending',
+            'manager' => in_array($currentStatus, ['Pending', 'Returned to Manager'], true)
+                && in_array($nextStatus, ['Forwarded', 'Returned'], true),
+            'approver' => $currentStatus === 'Forwarded'
+                && in_array($nextStatus, ['Approved', 'Disapproved', 'Rejected', 'Returned to Manager'], true),
+            default => false,
+        };
     }
 
     private function replaceRelatedRows(LoanRequest $loanRequest, int $memberId, array $data): void
