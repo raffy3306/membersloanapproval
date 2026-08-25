@@ -59,7 +59,9 @@ class LoanRequest extends Model
 
     public function member()
     {
-        return $this->belongsTo(Member::class);
+        // Loan and audit history must retain the member identity even when the
+        // member has since been soft-deleted from the active member directory.
+        return $this->belongsTo(Member::class)->withTrashed();
     }
 
     public function loanType()

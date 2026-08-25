@@ -403,6 +403,8 @@ class LoanRequestController extends BaseController
 
     private function summaryQuery()
     {
+        $memberColumns = array_merge(['id'], $this->memberNameColumns());
+
         return LoanRequest::query()
             ->select([
                 'id',
@@ -425,7 +427,7 @@ class LoanRequestController extends BaseController
                 'recommendation',
             ])
             ->with([
-                'member:id,fullname',
+                'member' => fn ($query) => $query->select($memberColumns),
                 'loanType:id,loan_type_name',
                 'branch:id,branch_name',
                 'requestedBy:id,email,fullname',
@@ -466,10 +468,28 @@ class LoanRequestController extends BaseController
             return;
         }
 
+        $nameColumns = $this->memberNameColumns();
+        if ($nameColumns === []) {
+            $query->whereRaw('1 = 0');
+            return;
+        }
+
         $prefixSearch = addcslashes($clientName, '\\%_') . '%';
-        $query->whereHas('member', function ($memberQuery) use ($prefixSearch): void {
-            $memberQuery->where('fullname', 'like', $prefixSearch);
+        $query->whereHas('member', function ($memberQuery) use ($nameColumns, $prefixSearch): void {
+            $memberQuery->where(function ($nameQuery) use ($nameColumns, $prefixSearch): void {
+                foreach ($nameColumns as $column) {
+                    $nameQuery->orWhere($column, 'like', $prefixSearch);
+                }
+            });
         });
+    }
+
+    private function memberNameColumns(): array
+    {
+        return array_values(array_filter(
+            ['fullname', 'client_name'],
+            fn (string $column): bool => Schema::hasColumn('members', $column)
+        ));
     }
 
     private function filterData(

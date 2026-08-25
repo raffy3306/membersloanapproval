@@ -1506,7 +1506,13 @@ function mapLoanRequest(raw: RawRecord): LoanRequest {
 
   return {
     requestId: asString(raw.request_id || raw.id),
-    memberName: asString(member.fullname || member.client_name || raw.member_name),
+    memberName: asString(
+      member.fullname
+      || member.client_name
+      || raw.member_name
+      || raw.fullname
+      || raw.client_name,
+    ),
     loanType: asString(loanType.loan_type_name || raw.loan_type_name),
     amount: asString(raw.amount_applied),
     status: asString(raw.status || 'Pending'),
