@@ -129,6 +129,25 @@ run_migrations_if_enabled() {
     exit 1
 }
 
+configure_web_port() {
+    web_port="${PORT:-80}"
+
+    case "$web_port" in
+        ''|*[!0-9]*)
+            echo "PORT must be a numeric TCP port. Received: ${web_port}"
+            exit 1
+            ;;
+    esac
+
+    if [ "$web_port" != "80" ]; then
+        sed -i "s/^Listen 80$/Listen ${web_port}/" /etc/apache2/ports.conf
+        sed -i "s/<VirtualHost \*:80>/<VirtualHost *:${web_port}>/" /etc/apache2/sites-available/000-default.conf
+    fi
+
+    echo "Apache configured to listen on port ${web_port}."
+}
+
+configure_web_port
 create_database_if_needed
 run_migrations_if_enabled
 
