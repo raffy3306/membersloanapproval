@@ -526,6 +526,44 @@ export class LaravelConfigurationError extends Error {
   }
 }
 
+function apiResponseError(response: Response, rawText: string): Error {
+  if ([502, 503, 504].includes(response.status)) {
+    return new Error(
+      `The backend service is temporarily unavailable (HTTP ${response.status}). Check that the Laravel service is running and that the deployment gateway is using the correct port.`,
+    );
+  }
+
+  return new Error(
+    `The API returned a non-JSON response (HTTP ${response.status}). Verify VITE_LARAVEL_API_URL and the deployment proxy configuration.${rawText.trim() ? ' Check the backend deployment logs for details.' : ''}`,
+  );
+}
+
+function parseApiEnvelope<T>(response: Response, rawText: string): ApiEnvelope<T> {
+  if (!rawText.trim()) {
+    if (!response.ok) {
+      throw new Error(`Request failed with status ${response.status}.`);
+    }
+
+    return {};
+  }
+
+  try {
+    const parsed = JSON.parse(rawText) as unknown;
+
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      throw apiResponseError(response, rawText);
+    }
+
+    return parsed as ApiEnvelope<T>;
+  } catch (error) {
+    if (error instanceof SyntaxError) {
+      throw apiResponseError(response, rawText);
+    }
+
+    throw error;
+  }
+}
+
 async function apiCall<T>(
   endpoint: string,
   method: 'GET' | 'POST' | 'PUT' | 'DELETE' = 'GET',
@@ -544,15 +582,21 @@ async function apiCall<T>(
     headers.Authorization = `Bearer ${authToken}`;
   }
 
-  const response = await fetch(`${API_BASE_URL}${endpoint}`, {
-    method,
-    headers,
-    body: data === undefined ? undefined : JSON.stringify(data),
-  });
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE_URL}${endpoint}`, {
+      method,
+      headers,
+      body: data === undefined ? undefined : JSON.stringify(data),
+    });
+  } catch {
+    throw new Error(
+      'Unable to reach the Laravel backend. Verify the API URL, backend service status, and deployment network settings.',
+    );
+  }
 
   const rawText = await response.text();
-  const parsed = rawText ? JSON.parse(rawText) : {};
-  const envelope = parsed as ApiEnvelope<T>;
+  const envelope = parseApiEnvelope<T>(response, rawText);
 
   if (!response.ok || envelope.success === false) {
     throw new Error(envelope.message || `Request failed with status ${response.status}.`);
@@ -577,15 +621,21 @@ async function apiFormCall<T>(
     headers.Authorization = `Bearer ${authToken}`;
   }
 
-  const response = await fetch(`${API_BASE_URL}${endpoint}`, {
-    method: 'POST',
-    headers,
-    body: data,
-  });
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE_URL}${endpoint}`, {
+      method: 'POST',
+      headers,
+      body: data,
+    });
+  } catch {
+    throw new Error(
+      'Unable to reach the Laravel backend. Verify the API URL, backend service status, and deployment network settings.',
+    );
+  }
 
   const rawText = await response.text();
-  const parsed = rawText ? JSON.parse(rawText) : {};
-  const envelope = parsed as ApiEnvelope<T>;
+  const envelope = parseApiEnvelope<T>(response, rawText);
 
   if (!response.ok || envelope.success === false) {
     throw new Error(envelope.message || `Request failed with status ${response.status}.`);
