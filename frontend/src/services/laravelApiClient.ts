@@ -58,6 +58,12 @@ export type PasswordRecoveryResponse = {
   message?: string;
 };
 
+export type ResetPasswordPayload = {
+  email: string;
+  token: string;
+  password: string;
+};
+
 export type LoanRequestStatus =
   | 'Pending'
   | 'Forwarded'
@@ -98,12 +104,22 @@ export type LoanRequestListPayload = {
   view: 'pending' | 'history';
   email: string;
   branchid: string;
+  dateFrom: string;
+  dateTo: string;
+  clientName?: string;
+  page?: number;
+  perPage?: number;
 };
 
 export type LoanRequestListResponse = {
   requests: LoanRequest[];
   sheetConfigured: boolean;
   pagination?: PaginationInfo;
+  filters?: {
+    date_from: string;
+    date_to: string;
+    client_name: string;
+  };
 };
 
 export type PaginationInfo = {
@@ -643,9 +659,25 @@ export async function getCurrentUser(): Promise<AuthenticatedUser> {
 }
 
 export async function sendPasswordRecovery(email: string): Promise<PasswordRecoveryResponse> {
+  const result = await apiCall<unknown>('/auth/forgot-password', 'POST', { email });
+
   return {
-    success: false,
-    message: `Password recovery for ${email} is not configured on the Laravel backend. Ask an admin to reset the account password.`,
+    success: true,
+    message: result.message || 'Reset link was successfully sent. Please check your inbox or spam folder for the reset email. Thanks.',
+  };
+}
+
+export async function resetPassword(payload: ResetPasswordPayload): Promise<PasswordRecoveryResponse> {
+  const result = await apiCall<unknown>('/auth/reset-password', 'POST', {
+    email: payload.email,
+    token: payload.token,
+    password: payload.password,
+    password_confirmation: payload.password,
+  });
+
+  return {
+    success: true,
+    message: result.message || 'Your password has been reset. You can now sign in.',
   };
 }
 
@@ -667,33 +699,68 @@ export async function changePassword(payload: ChangePasswordPayload): Promise<Ch
 export async function listLoanRequests(
   payload: LoanRequestListPayload,
 ): Promise<LoanRequestListResponse> {
-  const queryString = new URLSearchParams(payload).toString();
+  const query = new URLSearchParams();
+  query.set('dashboard', payload.dashboard);
+  query.set('view', payload.view);
+  query.set('email', payload.email);
+  query.set('branchid', payload.branchid);
+  query.set('date_from', payload.dateFrom);
+  query.set('date_to', payload.dateTo);
+  if (payload.clientName?.trim()) {
+    query.set('client_name', payload.clientName.trim());
+  }
+  query.set('page', String(payload.page ?? 1));
+  query.set('per_page', String(payload.perPage ?? 10));
   const result = unwrap(
-    await apiCall<{ requests: RawRecord[]; sheetConfigured?: boolean }>(
-      `/loan-requests?${queryString}`,
+    await apiCall<{
+      requests: RawRecord[];
+      sheetConfigured?: boolean;
+      pagination?: PaginationInfo;
+      filters?: { date_from: string; date_to: string; client_name: string };
+    }>(
+      `/loan-requests?${query.toString()}`,
     ),
   );
 
   return {
     requests: (result.requests || []).map(mapLoanRequest),
     sheetConfigured: result.sheetConfigured ?? true,
+    pagination: result.pagination,
+    filters: result.filters,
   };
 }
 
-export async function listAuditLogs(page: number = 1, perPage: number = 15): Promise<LoanRequestListResponse> {
+export async function listAuditLogs(
+  page: number,
+  perPage: number,
+  dateFrom: string,
+  dateTo: string,
+  clientName = '',
+): Promise<LoanRequestListResponse> {
   const query = new URLSearchParams();
   query.set('page', String(page));
   query.set('per_page', String(perPage));
+  query.set('date_from', dateFrom);
+  query.set('date_to', dateTo);
+  if (clientName.trim()) {
+    query.set('client_name', clientName.trim());
+  }
   const suffix = `?${query.toString()}`;
 
   const result = unwrap(
-    await apiCall<{ requests: RawRecord[]; sheetConfigured?: boolean; pagination?: PaginationInfo }>(`/loan-requests/audit${suffix}`),
+    await apiCall<{
+      requests: RawRecord[];
+      sheetConfigured?: boolean;
+      pagination?: PaginationInfo;
+      filters?: { date_from: string; date_to: string; client_name: string };
+    }>(`/loan-requests/audit${suffix}`),
   );
 
   return {
     requests: (result.requests || []).map(mapLoanRequest),
     sheetConfigured: result.sheetConfigured ?? true,
     pagination: result.pagination,
+    filters: result.filters,
   };
 }
 

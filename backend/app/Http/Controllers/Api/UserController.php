@@ -37,8 +37,8 @@ class UserController extends BaseController
     public function store(Request $request)
     {
         $validated = $request->validate([
-            'email' => 'required|unique:users,email',
-            'password' => 'nullable|min:6',
+            'email' => 'required|email|max:255|unique:users,email',
+            'password' => 'required|string|min:8|max:255',
             'role' => 'required|in:teller,manager,branch_manager,approver,admin',
             'fullname' => 'required|string',
             'position' => 'nullable|string',
@@ -48,7 +48,7 @@ class UserController extends BaseController
         ]);
 
         $validated['role'] = $validated['role'] === 'branch_manager' ? 'manager' : $validated['role'];
-        $validated['password'] = Hash::make($validated['password'] ?? 'password123');
+        $validated['password'] = Hash::make($validated['password']);
         $validated['first_login'] = $validated['first_login'] ?? true;
         $validated['status'] = $this->normalizeStatus($validated['status'] ?? null);
 
@@ -74,7 +74,7 @@ class UserController extends BaseController
                 $input = $this->normalizeImportInput($userInput);
                 $validated = Validator::make($input, [
                     'email' => ['required', 'email', 'max:255'],
-                    'password' => ['nullable', 'string'],
+                    'password' => ['nullable', 'string', 'min:8', 'max:255'],
                     'role' => ['required', 'string', 'max:255'],
                     'fullname' => ['required', 'string', 'max:255'],
                     'position' => ['nullable', 'string', 'max:255'],
@@ -97,7 +97,9 @@ class UserController extends BaseController
                 if (!empty($validated['password'])) {
                     $userData['password'] = $this->preparePassword($validated['password']);
                 } elseif (!$user) {
-                    $userData['password'] = Hash::make('password123');
+                    throw ValidationException::withMessages([
+                        'password' => 'Password is required for new users and must be at least 8 characters.',
+                    ]);
                 }
 
                 if ($user) {
@@ -144,8 +146,8 @@ class UserController extends BaseController
         }
 
         $validated = $request->validate([
-            'email' => 'nullable|unique:users,email,' . $id,
-            'password' => 'nullable|min:6',
+            'email' => 'nullable|email|max:255|unique:users,email,' . $id,
+            'password' => 'nullable|string|min:8|max:255',
             'role' => 'nullable|in:teller,manager,branch_manager,approver,admin',
             'fullname' => 'nullable|string',
             'position' => 'nullable|string',

@@ -14,13 +14,21 @@ class MemberController extends BaseController
 {
     public function index(Request $request)
     {
-        $search = $request->query('search', '');
-        $page = max(1, (int) $request->query('page', 1));
-        $perPage = min(max((int) $request->query('per_page', $request->query('limit', 50)), 1), 1000);
+        $validated = $request->validate([
+            'search' => ['nullable', 'string', 'max:100'],
+            'page' => ['nullable', 'integer', 'min:1'],
+            'per_page' => ['nullable', 'integer', 'min:1', 'max:100'],
+            'limit' => ['nullable', 'integer', 'min:1', 'max:100'],
+        ]);
+        $search = trim((string) ($validated['search'] ?? ''));
+        $page = (int) ($validated['page'] ?? 1);
+        $perPage = (int) ($validated['per_page'] ?? $validated['limit'] ?? 50);
         $query = Member::query()->with('branch');
         $user = $request->user();
 
-        if ($user && strtolower(trim((string) $user->role)) === 'teller') {
+        $role = strtolower(trim((string) $user?->role));
+
+        if ($user && in_array($role, ['teller', 'manager', 'branch_manager'], true)) {
             if (is_null($user->branch_id)) {
                 $query->whereRaw('1 = 0');
             } else {
@@ -30,21 +38,21 @@ class MemberController extends BaseController
 
         if ($search) {
             $searchableColumns = $this->existingMemberColumns([
-                'client_name',
                 'fullname',
+                'client_name',
                 'cif_key',
-                'contactnumber',
                 'contact',
-                'address',
-                'occupation',
-                'tin_number',
+                'contactnumber',
                 'tin',
+                'tin_number',
             ]);
 
-            $query->where(function ($memberQuery) use ($search, $searchableColumns) {
+            $prefixSearch = addcslashes($search, '\\%_') . '%';
+
+            $query->where(function ($memberQuery) use ($prefixSearch, $searchableColumns) {
                 foreach ($searchableColumns as $index => $column) {
                     $method = $index === 0 ? 'where' : 'orWhere';
-                    $memberQuery->{$method}($column, 'like', "%{$search}%");
+                    $memberQuery->{$method}($column, 'like', $prefixSearch);
                 }
             });
         }
@@ -75,12 +83,22 @@ class MemberController extends BaseController
         ]);
     }
 
-    public function show($id)
+    public function show(Request $request, $id)
     {
         $member = $this->findMember($id);
 
         if (!$member) {
             return $this->error('Member not found', 404);
+        }
+
+        $user = $request->user();
+        $role = strtolower(trim((string) $user?->role));
+
+        if (
+            in_array($role, ['teller', 'manager', 'branch_manager'], true) &&
+            (is_null($user?->branch_id) || (int) $member->branch_id !== (int) $user->branch_id)
+        ) {
+            return $this->error('You do not have permission to view this member.', 403);
         }
 
         return $this->success($member->load(['branch', 'loanRequests', 'otherLoans', 'comakers']));

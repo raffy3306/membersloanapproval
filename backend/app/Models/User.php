@@ -2,15 +2,18 @@
 
 namespace App\Models;
 
+use App\Services\EmailJsPasswordResetService;
 use Illuminate\Foundation\Auth\User as Authenticatable;
+use Illuminate\Auth\Passwords\CanResetPassword;
+use Illuminate\Contracts\Auth\CanResetPassword as CanResetPasswordContract;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\SoftDeletes;
 use Illuminate\Notifications\Notifiable;
 use Tymon\JWTAuth\Contracts\JWTSubject;
 
-class User extends Authenticatable implements JWTSubject
+class User extends Authenticatable implements JWTSubject, CanResetPasswordContract
 {
-    use HasFactory, Notifiable, SoftDeletes;
+    use CanResetPassword, HasFactory, Notifiable, SoftDeletes;
 
     protected $fillable = [
         'email',
@@ -63,5 +66,10 @@ class User extends Authenticatable implements JWTSubject
     public function getJWTCustomClaims()
     {
         return [];
+    }
+
+    public function sendPasswordResetNotification($token): void
+    {
+        app(EmailJsPasswordResetService::class)->send($this, $token);
     }
 }
