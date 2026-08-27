@@ -14,10 +14,35 @@ class UserController extends BaseController
 {
     public function index(Request $request)
     {
-        $page = max(1, (int)$request->query('page', 1));
-        $perPage = min(max(1, (int)$request->query('per_page', 15)), 100);
+        $validated = $request->validate([
+            'search' => ['nullable', 'string', 'max:100'],
+            'page' => ['nullable', 'integer', 'min:1'],
+            'per_page' => ['nullable', 'integer', 'min:1', 'max:100'],
+        ]);
+        $search = trim((string) ($validated['search'] ?? ''));
+        $page = (int) ($validated['page'] ?? 1);
+        $perPage = (int) ($validated['per_page'] ?? 15);
+        $query = User::query()->with('branch');
 
-        $paginated = User::with('branch')
+        if ($search !== '') {
+            $searchPattern = '%' . addcslashes($search, '\\%_') . '%';
+
+            $query->where(function ($userQuery) use ($searchPattern) {
+                $userQuery
+                    ->where('email', 'like', $searchPattern)
+                    ->orWhere('fullname', 'like', $searchPattern)
+                    ->orWhere('role', 'like', $searchPattern)
+                    ->orWhere('position', 'like', $searchPattern)
+                    ->orWhere('status', 'like', $searchPattern)
+                    ->orWhereHas('branch', function ($branchQuery) use ($searchPattern) {
+                        $branchQuery
+                            ->where('branch_code', 'like', $searchPattern)
+                            ->orWhere('branch_name', 'like', $searchPattern);
+                    });
+            });
+        }
+
+        $paginated = $query
             ->orderBy('email')
             ->paginate($perPage, ['*'], 'page', $page);
 

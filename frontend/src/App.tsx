@@ -22,8 +22,10 @@ import {
   History,
   Inbox,
   Landmark,
+  KeyRound,
   LayoutDashboard,
   LockKeyhole,
+  LockKeyholeOpen,
   LogIn,
   LogOut,
   Mail,
@@ -128,8 +130,11 @@ const memberCsvHeaders: Array<keyof Member> = [
 const memberImportBatchSize = 500;
 const userImportBatchSize = 500;
 const adminPageSize = 15;
+const adminUsersPageSize = 10;
+const adminLoanTypesPageSize = 10;
 const loanPageSize = 10;
 const exportPageSize = 100;
+const showBulkDeleteButtons = false;
 
 function toDateInputValueFromParts(year: number, month: number, day: number) {
   return [year, String(month).padStart(2, '0'), String(day).padStart(2, '0')].join('-');
@@ -1449,8 +1454,15 @@ function LoginPage({
         </div>
 
         <section className="login-panel" aria-labelledby="login-title">
-          <div className="login-avatar" aria-hidden="true">
-            <LockKeyhole size={58} />
+          <div
+            className={`login-avatar ${isSubmitting && !isRecoveringPassword ? 'is-unlocking' : ''}`}
+            aria-hidden="true"
+          >
+            <div className="login-unlock-animation">
+              <LockKeyhole className="login-lock-closed" size={58} />
+              <LockKeyholeOpen className="login-lock-open" size={58} />
+              <KeyRound className="login-unlock-key" size={42} />
+            </div>
           </div>
           <div className="panel-heading login-panel-heading">
             <div>
@@ -2594,7 +2606,7 @@ function AdminLoanTypes() {
       setIsLoading(true);
 
       try {
-        const result = await listAdminLoanTypes(currentPage, adminPageSize);
+        const result = await listAdminLoanTypes(currentPage, adminLoanTypesPageSize);
 
         if (!isCurrent) {
           return;
@@ -3212,20 +3224,22 @@ function AdminMembers({
               <Download size={17} aria-hidden="true" />
               Export
             </button>
-            <button
-              className="secondary-button inline-button danger-button"
-              type="button"
-              onClick={() => void handleDeleteAllMembers()}
-              disabled={
-                isLoading ||
-                isImporting ||
-                isDeletingAll ||
-                !(pagination?.total ?? members.length)
-              }
-            >
-              <Trash2 size={17} aria-hidden="true" />
-              {isDeletingAll ? 'Deleting' : 'Delete All'}
-            </button>
+            {showBulkDeleteButtons ? (
+              <button
+                className="secondary-button inline-button danger-button"
+                type="button"
+                onClick={() => void handleDeleteAllMembers()}
+                disabled={
+                  isLoading ||
+                  isImporting ||
+                  isDeletingAll ||
+                  !(pagination?.total ?? members.length)
+                }
+              >
+                <Trash2 size={17} aria-hidden="true" />
+                {isDeletingAll ? 'Deleting' : 'Delete All'}
+              </button>
+            ) : null}
           </>
         ) : null}
         <span className="count-chip">
@@ -3319,7 +3333,7 @@ function AdminMemberModal({
   const title = member ? 'Member Details' : 'Add Member';
 
   return (
-    <div className="modal-overlay" onClick={onCancel}>
+    <div className="modal-overlay">
       <div
         aria-labelledby="admin-member-modal-title"
         aria-modal="true"
@@ -3854,17 +3868,19 @@ function AdminUsers() {
   const [isDeletingAll, setIsDeletingAll] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
   const [successMessage, setSuccessMessage] = useState('');
+  const [searchQuery, setSearchQuery] = useState('');
   const [refreshToken, setRefreshToken] = useState(0);
 
   useEffect(() => {
     let isCurrent = true;
+    const search = searchQuery.trim();
 
     const loadUsers = async () => {
       setErrorMessage('');
       setIsLoading(true);
 
       try {
-        const result = await listUsers(currentPage, adminPageSize);
+        const result = await listUsers(currentPage, adminUsersPageSize, search);
 
         if (!isCurrent) {
           return;
@@ -3885,12 +3901,15 @@ function AdminUsers() {
       }
     };
 
-    void loadUsers();
+    const timeoutId = window.setTimeout(() => {
+      void loadUsers();
+    }, search ? 250 : 0);
 
     return () => {
       isCurrent = false;
+      window.clearTimeout(timeoutId);
     };
-  }, [currentPage, refreshToken]);
+  }, [currentPage, refreshToken, searchQuery]);
 
   const handleSaved = (message?: string) => {
     setIsAdding(false);
@@ -4028,6 +4047,18 @@ function AdminUsers() {
   return (
     <div className="admin-stack">
       <div className="panel-actions">
+        <label className="field-control admin-search-field">
+          <span>Search Users</span>
+          <input
+            type="search"
+            placeholder="Name, email, role, branch, or status"
+            value={searchQuery}
+            onChange={(event) => {
+              setSearchQuery(event.target.value);
+              setCurrentPage(1);
+            }}
+          />
+        </label>
         <button
           className="secondary-button inline-button"
           type="button"
@@ -4060,21 +4091,23 @@ function AdminUsers() {
           <Download size={17} aria-hidden="true" />
           {isExporting ? 'Exporting' : 'Export'}
         </button>
-        <button
-          className="secondary-button inline-button danger-button"
-          type="button"
-          onClick={() => void handleDeleteAllUsers()}
-          disabled={
-            isLoading ||
-            isImporting ||
-            isExporting ||
-            isDeletingAll ||
-            (pagination?.total ?? users.length) <= 1
-          }
-        >
-          <Trash2 size={17} aria-hidden="true" />
-          {isDeletingAll ? 'Deleting' : 'Delete All'}
-        </button>
+        {showBulkDeleteButtons ? (
+          <button
+            className="secondary-button inline-button danger-button"
+            type="button"
+            onClick={() => void handleDeleteAllUsers()}
+            disabled={
+              isLoading ||
+              isImporting ||
+              isExporting ||
+              isDeletingAll ||
+              (pagination?.total ?? users.length) <= 1
+            }
+          >
+            <Trash2 size={17} aria-hidden="true" />
+            {isDeletingAll ? 'Deleting' : 'Delete All'}
+          </button>
+        ) : null}
         <span className="count-chip">
           {isLoading ? 'Loading' : `${pagination?.total ?? users.length} users`}
         </span>

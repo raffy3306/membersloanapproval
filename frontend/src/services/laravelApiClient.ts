@@ -1237,10 +1237,17 @@ export async function returnLoanRequestToManager(
   };
 }
 
-export async function listUsers(page: number = 1, perPage: number = 15): Promise<ListUsersResponse> {
+export async function listUsers(
+  page: number = 1,
+  perPage: number = 15,
+  search: string = '',
+): Promise<ListUsersResponse> {
   const query = new URLSearchParams();
   query.set('page', String(page));
   query.set('per_page', String(perPage));
+  if (search.trim()) {
+    query.set('search', search.trim());
+  }
   const suffix = `?${query.toString()}`;
 
   const result = unwrap(

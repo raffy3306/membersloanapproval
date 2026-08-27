@@ -107,13 +107,24 @@ class MemberController extends BaseController
     public function store(Request $request)
     {
         $user = $request->user();
+
+        // Normalize the CIF before checking uniqueness so surrounding whitespace
+        // cannot be used to create a second record for the same member.
+        $request->merge([
+            'cif_key' => trim((string) $request->input('cif_key')),
+        ]);
+
         $validated = $request->validate($this->validationRules([
             'cif_key' => ['required', 'string', 'max:255', 'unique:members,cif_key'],
             'client_name' => ['required_without:fullname', 'nullable', 'string', 'max:255'],
             'fullname' => ['required_without:client_name', 'nullable', 'string', 'max:255'],
-        ]));
+        ]), [
+            'cif_key.unique' => 'A member with this CIF key already exists in the system database.',
+        ]);
 
-        if ($user && strtolower(trim((string) $user->role)) === 'teller') {
+        $isTeller = $user && strtolower(trim((string) $user->role)) === 'teller';
+
+        if ($isTeller) {
             if (is_null($user->branch_id)) {
                 return $this->error(
                     'Your teller account does not have an assigned branch.',
@@ -121,10 +132,17 @@ class MemberController extends BaseController
                 );
             }
 
-            $validated['branch_id'] = (string) $user->branch_id;
         }
 
-        $member = Member::create($this->toMemberData($validated, true));
+        $memberData = $this->toMemberData($validated, true);
+
+        // Never trust a teller-supplied branch value. Use the authenticated
+        // account's exact branch ID and bypass branch code/name resolution.
+        if ($isTeller) {
+            $memberData['branch_id'] = (int) $user->branch_id;
+        }
+
+        $member = Member::create($memberData);
 
         return $this->success($member->load('branch'), 'Member created successfully', 201);
     }
