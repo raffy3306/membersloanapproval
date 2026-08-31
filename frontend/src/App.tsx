@@ -29,6 +29,7 @@ import {
   LogIn,
   LogOut,
   Mail,
+  Menu,
   Plus,
   Printer,
   RefreshCw,
@@ -2005,13 +2006,17 @@ function AdminDashboard({
   user,
 }: AdminDashboardProps) {
   const [activeView, setActiveView] = useState<AdminView>('audit');
+  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const activeMenu =
     adminConfig.menus.find((menu) => menu.id === activeView) ||
     adminConfig.menus[0];
 
   return (
     <div className="dashboard-shell">
-      <aside className="dashboard-sidebar">
+      <aside
+        className={`dashboard-sidebar ${isMobileMenuOpen ? 'is-open' : ''}`}
+        id="admin-mobile-navigation"
+      >
         <div className="sidebar-brand">
           <div className="brand-mark sidebar-mark">
             <ShieldCheck size={24} aria-hidden="true" />
@@ -2020,6 +2025,14 @@ function AdminDashboard({
             <p className="eyebrow">Member&apos;s Loan</p>
             <strong>Admin</strong>
           </div>
+          <button
+            className="sidebar-close"
+            type="button"
+            onClick={() => setIsMobileMenuOpen(false)}
+            aria-label="Close navigation menu"
+          >
+            <X size={22} aria-hidden="true" />
+          </button>
         </div>
 
         <nav className="sidebar-nav" aria-label="Admin dashboard menu">
@@ -2032,7 +2045,10 @@ function AdminDashboard({
                 className={`sidebar-link ${isActive ? 'active' : ''}`}
                 key={menu.id}
                 type="button"
-                onClick={() => setActiveView(menu.id)}
+                onClick={() => {
+                  setActiveView(menu.id);
+                  setIsMobileMenuOpen(false);
+                }}
               >
                 <Icon size={19} aria-hidden="true" />
                 <span>
@@ -2052,11 +2068,31 @@ function AdminDashboard({
         </div>
       </aside>
 
+      <button
+        className={`sidebar-backdrop ${isMobileMenuOpen ? 'is-visible' : ''}`}
+        type="button"
+        onClick={() => setIsMobileMenuOpen(false)}
+        aria-label="Close navigation menu"
+        tabIndex={isMobileMenuOpen ? 0 : -1}
+      />
+
       <main className="dashboard-main">
         <header className="dashboard-header">
-          <div>
-            <p className="eyebrow">{adminConfig.eyebrow}</p>
-            <h1>{adminConfig.title}</h1>
+          <div className="dashboard-title-group">
+            <button
+              className="mobile-menu-button"
+              type="button"
+              onClick={() => setIsMobileMenuOpen(true)}
+              aria-label="Open navigation menu"
+              aria-controls="admin-mobile-navigation"
+              aria-expanded={isMobileMenuOpen}
+            >
+              <Menu size={22} aria-hidden="true" />
+            </button>
+            <div>
+              <p className="eyebrow">{adminConfig.eyebrow}</p>
+              <h1>{adminConfig.title}</h1>
+            </div>
           </div>
           <div className="topbar-actions">
             <div className={`status-pill ${connectionState}`}>
@@ -2204,14 +2240,14 @@ function AdminAuditLogs() {
         {requests.length ? (
           requests.map((request) => (
             <div className="admin-row" role="row" key={getRequestKey(request)}>
-              <span>{request.requestId || '-'}</span>
-              <strong>{request.memberName || '-'}</strong>
-              <span>{formatBranchLabel(request.branchName, request.branchid)}</span>
-              <span>{request.requestedByName || request.requestedBy || '-'}</span>
-              <span>
+              <span data-label="Request ID">{request.requestId || '-'}</span>
+              <strong data-label="Member">{request.memberName || '-'}</strong>
+              <span data-label="Branch">{formatBranchLabel(request.branchName, request.branchid)}</span>
+              <span data-label="Requested By">{request.requestedByName || request.requestedBy || '-'}</span>
+              <span data-label="Status">
                 <StatusBadge status={request.status} />
               </span>
-              <span>{request.requestedAt || '-'}</span>
+              <span data-label="Requested">{request.requestedAt || '-'}</span>
             </div>
           ))
         ) : (
@@ -2357,11 +2393,11 @@ function AdminBranches() {
         {branches.length ? (
           branches.map((branch) => (
             <div className="admin-row" role="row" key={branch.id}>
-              <span>{branch.branch_code || '-'}</span>
-              <strong>{branch.branch_name || '-'}</strong>
-              <span>{branch.address || '-'}</span>
-              <span>{branch.phone || '-'}</span>
-              <span className="row-actions">
+              <span data-label="Branch Code">{branch.branch_code || '-'}</span>
+              <strong data-label="Name">{branch.branch_name || '-'}</strong>
+              <span data-label="Address">{branch.address || '-'}</span>
+              <span data-label="Phone">{branch.phone || '-'}</span>
+              <span className="row-actions" data-label="Action">
                 <button
                   className="icon-action"
                   type="button"
@@ -2696,23 +2732,23 @@ function AdminLoanTypes() {
         {loanTypes.length ? (
           loanTypes.map((loanType) => (
             <div className="admin-row" role="row" key={loanType.loan_id}>
-              <strong title={loanType.description}>{loanType.loantype}</strong>
-              <span>{formatOptionalAmount(loanType.minimumAmount)}</span>
-              <span>{formatOptionalAmount(loanType.maximumAmount)}</span>
-              <span>
+              <strong data-label="Loan Type" title={loanType.description}>{loanType.loantype}</strong>
+              <span data-label="Minimum">{formatOptionalAmount(loanType.minimumAmount)}</span>
+              <span data-label="Maximum">{formatOptionalAmount(loanType.maximumAmount)}</span>
+              <span data-label="Max Term">
                 {loanType.maximumTermMonths
                   ? `${loanType.maximumTermMonths} months`
                   : '-'}
               </span>
-              <span>
+              <span data-label="Interest">
                 {loanType.interestRate ? `${loanType.interestRate}%` : '-'}
               </span>
-              <span>
+              <span data-label="Status">
                 <StatusBadge
                   status={loanType.isActive ? 'ACTIVE' : 'INACTIVE'}
                 />
               </span>
-              <span>
+              <span data-label="Action">
                 <button
                   className="icon-action"
                   type="button"
@@ -3277,13 +3313,13 @@ function AdminMembers({
         {members.length ? (
           members.map((member) => (
             <div className="admin-row" role="row" key={member.id || member.cif_key}>
-              <span>{member.cif_key || '-'}</span>
-              <strong>{member.client_name || '-'}</strong>
-              <span>{member.membership_type || '-'}</span>
-              <span>{member.contactnumber || '-'}</span>
-              <span title={member.branch_name}>{member.branch_name || member.branch_id || '-'}</span>
-              <span>{member.status || '-'}</span>
-              <span className="row-actions">
+              <span data-label="CIF Key">{member.cif_key || '-'}</span>
+              <strong data-label="Name">{member.client_name || '-'}</strong>
+              <span data-label="Type">{member.membership_type || '-'}</span>
+              <span data-label="Contact">{member.contactnumber || '-'}</span>
+              <span data-label="Branch" title={member.branch_name}>{member.branch_name || member.branch_id || '-'}</span>
+              <span data-label="Status">{member.status || '-'}</span>
+              <span className="row-actions" data-label="Action">
                 <button
                   className="icon-action"
                   type="button"
@@ -4142,15 +4178,15 @@ function AdminUsers() {
         {users.length ? (
           users.map((adminUser) => (
             <div className="admin-row" role="row" key={adminUser.email}>
-              <span>{adminUser.email}</span>
-              <strong>{adminUser.fullname || '-'}</strong>
-              <span>{adminUser.role || '-'}</span>
-              <span>{formatBranchLabel(adminUser.branchName, adminUser.branchid)}</span>
-              <span>
+              <span data-label="Email">{adminUser.email}</span>
+              <strong data-label="Name">{adminUser.fullname || '-'}</strong>
+              <span data-label="Role">{adminUser.role || '-'}</span>
+              <span data-label="Branch">{formatBranchLabel(adminUser.branchName, adminUser.branchid)}</span>
+              <span data-label="Status">
                 <StatusBadge status={formatUserStatus(adminUser.status)} />
               </span>
-              <span>{adminUser.firstLogin ? 'Yes' : 'No'}</span>
-              <span>
+              <span data-label="First Login">{adminUser.firstLogin ? 'Yes' : 'No'}</span>
+              <span data-label="Action">
                 <button
                   className="icon-action"
                   type="button"
@@ -4567,6 +4603,7 @@ function Dashboard({
   const [activeView, setActiveView] = useState<DashboardView>(
     config.menus[0].id,
   );
+  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [currentPage, setCurrentPage] = useState(1);
   const [dateFrom, setDateFrom] = useState(initialDateRange.dateFrom);
   const [dateTo, setDateTo] = useState(initialDateRange.dateTo);
@@ -4812,7 +4849,10 @@ function Dashboard({
 
   return (
     <div className="dashboard-shell">
-      <aside className="dashboard-sidebar">
+      <aside
+        className={`dashboard-sidebar ${isMobileMenuOpen ? 'is-open' : ''}`}
+        id="dashboard-mobile-navigation"
+      >
         <div className="sidebar-brand">
           <div className="brand-mark sidebar-mark">
             <ShieldCheck size={24} aria-hidden="true" />
@@ -4821,6 +4861,14 @@ function Dashboard({
             <p className="eyebrow">Member&apos;s Loan</p>
             <strong>Approval</strong>
           </div>
+          <button
+            className="sidebar-close"
+            type="button"
+            onClick={() => setIsMobileMenuOpen(false)}
+            aria-label="Close navigation menu"
+          >
+            <X size={22} aria-hidden="true" />
+          </button>
         </div>
 
         <nav className="sidebar-nav" aria-label={`${config.title} menu`}>
@@ -4833,7 +4881,10 @@ function Dashboard({
                 className={`sidebar-link ${isActive ? 'active' : ''}`}
                 key={menu.id}
                 type="button"
-                onClick={() => setActiveView(menu.id)}
+                onClick={() => {
+                  setActiveView(menu.id);
+                  setIsMobileMenuOpen(false);
+                }}
               >
                 <Icon size={19} aria-hidden="true" />
                 <span>
@@ -4853,11 +4904,31 @@ function Dashboard({
         </div>
       </aside>
 
+      <button
+        className={`sidebar-backdrop ${isMobileMenuOpen ? 'is-visible' : ''}`}
+        type="button"
+        onClick={() => setIsMobileMenuOpen(false)}
+        aria-label="Close navigation menu"
+        tabIndex={isMobileMenuOpen ? 0 : -1}
+      />
+
       <main className="dashboard-main">
         <header className="dashboard-header">
-          <div>
-            <p className="eyebrow">{config.eyebrow}</p>
-            <h1>{config.title}</h1>
+          <div className="dashboard-title-group">
+            <button
+              className="mobile-menu-button"
+              type="button"
+              onClick={() => setIsMobileMenuOpen(true)}
+              aria-label="Open navigation menu"
+              aria-controls="dashboard-mobile-navigation"
+              aria-expanded={isMobileMenuOpen}
+            >
+              <Menu size={22} aria-hidden="true" />
+            </button>
+            <div>
+              <p className="eyebrow">{config.eyebrow}</p>
+              <h1>{config.title}</h1>
+            </div>
           </div>
           <div className="topbar-actions">
             <div className={`status-pill ${connectionState}`}>
@@ -6029,18 +6100,18 @@ function RequestTable({
       {requests.length ? (
         requests.map((request) => (
           <div className="requests-row" role="row" key={getRequestKey(request)}>
-            <span>{request.requestId || '-'}</span>
-            <strong>{request.memberName || '-'}</strong>
-            <span>{request.loanType || '-'}</span>
-            <span>{request.amount || '-'}</span>
-            <span title={formatBranchLabel(request.branchName, request.branchid)}>
+            <span data-label="Request ID">{request.requestId || '-'}</span>
+            <strong data-label="Member">{request.memberName || '-'}</strong>
+            <span data-label="Loan Type">{request.loanType || '-'}</span>
+            <span data-label="Amount">{request.amount || '-'}</span>
+            <span data-label="Branch" title={formatBranchLabel(request.branchName, request.branchid)}>
               {formatBranchLabel(request.branchName, request.branchid)}
             </span>
-            <span>
+            <span data-label="Status">
               <StatusBadge status={request.status} />
             </span>
-            <span>{request.requestedAt || '-'}</span>
-            <span>
+            <span data-label="Requested">{request.requestedAt || '-'}</span>
+            <span data-label="Action">
               <button
                 className="icon-action"
                 type="button"
