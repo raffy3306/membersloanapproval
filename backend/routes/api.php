@@ -12,7 +12,7 @@ use App\Http\Controllers\Api\HealthController;
 use App\Http\Controllers\Api\BranchController;
 use App\Http\Controllers\Api\AttachmentController;
 
-Route::post('/auth/login', [AuthController::class, 'login'])->middleware('throttle:5,1');
+Route::post('/auth/login', [AuthController::class, 'login']);
 Route::post('/auth/forgot-password', [AuthController::class, 'forgotPassword'])->middleware('throttle:5,1');
 Route::post('/auth/reset-password', [AuthController::class, 'resetPassword'])->middleware('throttle:5,1');
 Route::get('/health', [HealthController::class, 'check'])->middleware('throttle:30,1');

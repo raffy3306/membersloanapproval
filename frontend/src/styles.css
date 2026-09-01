@@ -2656,20 +2656,74 @@ button {
     justify-content: flex-start;
   }
 
-  .requests-table {
-    overflow-x: auto;
+  .requests-panel {
+    min-width: 0;
   }
 
-  .requests-row {
-    min-width: 980px;
-  }
-
+  .requests-table,
   .admin-table {
-    overflow-x: auto;
+    display: grid;
+    gap: 12px;
+    overflow: visible;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
   }
 
-  .admin-row {
-    min-width: 1080px;
+  .requests-table .requests-row.requests-head,
+  .admin-table .admin-row.admin-head {
+    display: none;
+  }
+
+  .requests-row,
+  .admin-table .admin-row {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0 20px;
+    min-width: 0;
+    min-height: 0;
+    padding: 10px 14px;
+    border: 1px solid rgba(43, 20, 146, 0.14);
+    border-radius: 8px;
+    background: #ffffff;
+    box-shadow: 0 6px 18px rgba(24, 33, 31, 0.06);
+  }
+
+  .requests-row > [data-label],
+  .admin-row > [data-label] {
+    display: grid;
+    grid-template-columns: minmax(100px, 0.42fr) minmax(0, 1fr);
+    align-items: start;
+    gap: 10px;
+    min-width: 0;
+    padding: 9px 0;
+    border-bottom: 1px solid rgba(43, 20, 146, 0.08);
+    overflow: visible;
+    text-align: right;
+    text-overflow: clip;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+
+  .requests-row > [data-label]::before,
+  .admin-row > [data-label]::before {
+    content: attr(data-label);
+    color: var(--brand-muted);
+    font-size: 0.75rem;
+    font-weight: 800;
+    letter-spacing: 0.04em;
+    text-align: left;
+    text-transform: uppercase;
+  }
+
+  .requests-empty,
+  .admin-empty {
+    display: block;
+    min-width: 0;
+    padding: 16px;
+    border: 1px solid rgba(43, 20, 146, 0.12);
+    border-radius: 8px;
+    background: #ffffff;
   }
 
   .topbar {
@@ -2894,6 +2948,12 @@ button {
     width: 100%;
   }
 
+  .admin-search-field {
+    flex: 0 1 auto;
+    width: 100%;
+    max-width: none;
+  }
+
   .requests-panel,
   .queue-panel {
     padding: 14px;
@@ -2910,14 +2970,14 @@ button {
     background: transparent;
   }
 
-  .requests-head,
-  .admin-head,
-  .queue-head {
+  .requests-table .requests-row.requests-head,
+  .admin-table .admin-row.admin-head,
+  .queue-table .queue-row.queue-head {
     display: none;
   }
 
   .requests-row,
-  .admin-row,
+  .admin-table .admin-row,
   .queue-row {
     display: grid;
     grid-template-columns: 1fr;
