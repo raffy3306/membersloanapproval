@@ -1523,7 +1523,10 @@ function mapLoanRequest(raw: RawRecord): LoanRequest {
     loanType: asString(loanType.loan_type_name || raw.loan_type_name),
     amount: asString(raw.amount_applied),
     status: asString(raw.status || 'Pending'),
-    requestedAt: asString(raw.request_date),
+    // Laravel serializes datetime casts in UTC. A request entered as local
+    // midnight can therefore arrive as the previous UTC calendar date. Keep
+    // this date-only field aligned with the local date shown in the details.
+    requestedAt: toDateInputValue(asString(raw.request_date)),
     decidedAt: asString(raw.date_of_approval),
     requestedBy: asString(requestedBy.email || raw.requested_by),
     requestedByName: asString(requestedBy.fullname),
