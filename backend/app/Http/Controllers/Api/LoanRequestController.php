@@ -383,15 +383,24 @@ class LoanRequestController extends BaseController
 
     public function destroy($id)
     {
-        $loanRequest = $this->findLoanRequest($id);
+        return DB::transaction(function () use ($id) {
+            $loanRequest = LoanRequest::where('id', $id)
+                ->orWhere('request_id', $id)
+                ->lockForUpdate()
+                ->first();
 
-        if (!$loanRequest) {
-            return $this->error('Loan request not found', 404);
-        }
+            if (!$loanRequest) {
+                return $this->error('Loan request not found', 404);
+            }
 
-        $loanRequest->delete();
+            if (strcasecmp(trim((string) $loanRequest->status), 'Pending') !== 0) {
+                return $this->error('Only pending loan requests can be deleted.', 409);
+            }
 
-        return $this->success([], 'Loan request deleted successfully');
+            $loanRequest->delete();
+
+            return $this->success([], 'Pending loan request deleted successfully');
+        });
     }
 
     private function findLoanRequest(string $id): ?LoanRequest

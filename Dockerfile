@@ -42,7 +42,12 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/* \
     && a2enmod headers rewrite
 
-RUN echo "expose_php=Off" > /usr/local/etc/php/conf.d/security.ini
+RUN printf '%s\n' \
+        'expose_php=Off' \
+        'upload_max_filesize=5M' \
+        'post_max_size=60M' \
+        'max_file_uploads=10' \
+        > /usr/local/etc/php/conf.d/uploads.ini
 
 COPY docker/apache.conf /etc/apache2/sites-available/000-default.conf
 

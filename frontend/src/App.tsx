@@ -8,6 +8,7 @@ import {
   useMemo,
   useState,
 } from 'react';
+import Compressor from 'compressorjs';
 import {
   AlertTriangle,
   Building2,
@@ -77,6 +78,7 @@ import {
   deleteAllUsers,
   deleteAttachment,
   deleteBranch,
+  deleteLoanRequest,
   deleteMember,
   disapproveLoanRequest,
   forwardLoanRequest,
@@ -162,6 +164,47 @@ function useDebouncedValue<T>(value: T, delayMs: number) {
   }, [delayMs, value]);
 
   return debouncedValue;
+}
+
+function useAutoDismissMessage(delayMs = 2500) {
+  const [message, setMessage] = useState('');
+
+  useEffect(() => {
+    if (!message) {
+      return undefined;
+    }
+
+    const timeoutId = window.setTimeout(() => setMessage(''), delayMs);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [delayMs, message]);
+
+  return [message, setMessage] as const;
+}
+
+function ValidationToast({
+  message,
+  tone = 'error',
+}: {
+  message: string;
+  tone?: 'error' | 'success' | 'info';
+}) {
+  if (!message) {
+    return null;
+  }
+
+  const Icon = tone === 'error' ? AlertTriangle : CheckCircle2;
+
+  return (
+    <div
+      className={`validation-toast ${tone}`}
+      role={tone === 'error' ? 'alert' : 'status'}
+      aria-live={tone === 'error' ? 'assertive' : 'polite'}
+    >
+      <Icon size={20} aria-hidden="true" />
+      <span>{message}</span>
+    </div>
+  );
 }
 
 type MemberImportField = keyof Member | 'first_name' | 'last_name';
@@ -1146,6 +1189,8 @@ const attachmentTypeOptions = [
   'Registry of Deeds (ROD) O.R.',
 ] as const;
 
+const MAX_ATTACHMENT_FILE_SIZE = 5 * 1024 * 1024;
+
 type AttachmentFormRow = {
   rowId: string;
   id?: string;
@@ -1155,6 +1200,7 @@ type AttachmentFormRow = {
   mimeType: string;
   size: string;
   uploadedAt: string;
+  isCompressing?: boolean;
 };
 
 const securityFields: Array<{
@@ -1178,7 +1224,7 @@ function App() {
       hasLaravelApiUrl ? 'checking' : 'not-configured',
     );
   const [health, setHealth] = useState<BackendHealth | null>(null);
-  const [errorMessage, setErrorMessage] = useState('');
+  const [errorMessage, setErrorMessage] = useAutoDismissMessage();
 
   const activeStatus = statusCopy[connectionState];
 
@@ -1330,11 +1376,11 @@ function LoginPage({
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [loginError, setLoginError] = useState('');
+  const [loginError, setLoginError] = useAutoDismissMessage();
   const [showPassword, setShowPassword] = useState(false);
   const [isRecoveringPassword, setIsRecoveringPassword] = useState(false);
   const [recoveryEmail, setRecoveryEmail] = useState('');
-  const [recoveryMessage, setRecoveryMessage] = useState('');
+  const [recoveryMessage, setRecoveryMessage] = useAutoDismissMessage();
   const [useBrandLogoImage, setUseBrandLogoImage] = useState(true);
 
   const canSubmit =
@@ -1423,7 +1469,7 @@ function LoginPage({
             compact
           />
 
-          {errorMessage ? <p className="error-text">{errorMessage}</p> : null}
+          <ValidationToast message={errorMessage} />
 
           <button
             className="secondary-button inline-button"
@@ -1497,8 +1543,8 @@ function LoginPage({
                 value={recoveryEmail}
               />
             </div>
-            {loginError ? <p className="error-text">{loginError}</p> : null}
-            {recoveryMessage ? <p className="notice-text">{recoveryMessage}</p> : null}
+            <ValidationToast message={loginError} />
+            <ValidationToast message={recoveryMessage} tone="success" />
             {!recoveryMessage ? (
               <button className="primary-button" type="submit" disabled={!recoveryEmail.trim() || isSubmitting}>
                 <Send size={18} aria-hidden="true" />
@@ -1562,7 +1608,7 @@ function LoginPage({
               </button>
             </div>
 
-            {loginError ? <p className="error-text">{loginError}</p> : null}
+            <ValidationToast message={loginError} />
 
             <button
               className="primary-button"
@@ -1598,8 +1644,8 @@ function LoginPage({
 function ResetPasswordPage({ request }: { request: PasswordResetRequest }) {
   const [password, setPassword] = useState('');
   const [confirmation, setConfirmation] = useState('');
-  const [formError, setFormError] = useState('');
-  const [successMessage, setSuccessMessage] = useState('');
+  const [formError, setFormError] = useAutoDismissMessage();
+  const [successMessage, setSuccessMessage] = useAutoDismissMessage();
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [showPasswords, setShowPasswords] = useState(false);
   const canSubmit = password.length >= 8 && confirmation.length >= 8 && !isSubmitting;
@@ -1646,7 +1692,7 @@ function ResetPasswordPage({ request }: { request: PasswordResetRequest }) {
 
         {successMessage ? (
           <div className="login-form">
-            <p className="notice-text">{successMessage}</p>
+            <ValidationToast message={successMessage} tone="success" />
             <a className="primary-button password-reset-link" href="/">Return to Sign In</a>
           </div>
         ) : (
@@ -1686,7 +1732,7 @@ function ResetPasswordPage({ request }: { request: PasswordResetRequest }) {
                 value={confirmation}
               />
             </div>
-            {formError ? <p className="error-text">{formError}</p> : null}
+            <ValidationToast message={formError} />
             <button className="primary-button" type="submit" disabled={!canSubmit}>
               <Save size={18} aria-hidden="true" />
               {isSubmitting ? 'Resetting Password' : 'Reset Password'}
@@ -1713,7 +1759,7 @@ function FirstLoginPasswordChange({
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
-  const [formError, setFormError] = useState('');
+  const [formError, setFormError] = useAutoDismissMessage();
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [showPasswords, setShowPasswords] = useState(false);
 
@@ -1783,7 +1829,7 @@ function FirstLoginPasswordChange({
           compact
         />
 
-        {errorMessage ? <p className="error-text">{errorMessage}</p> : null}
+        <ValidationToast message={errorMessage} />
 
         <div className="security-actions">
           <button
@@ -1870,7 +1916,7 @@ function FirstLoginPasswordChange({
             </button>
           </div>
 
-          {formError ? <p className="error-text">{formError}</p> : null}
+          <ValidationToast message={formError} />
 
           <button className="primary-button" type="submit" disabled={!canSubmit}>
             <Save size={18} aria-hidden="true" />
@@ -2106,9 +2152,7 @@ function AdminDashboard({
           </div>
         </header>
 
-        {errorMessage ? (
-          <p className="error-text dashboard-notice">{errorMessage}</p>
-        ) : null}
+        <ValidationToast message={errorMessage} />
 
         <section className="requests-panel" aria-labelledby="admin-title">
           <div className="panel-heading">
@@ -2146,8 +2190,14 @@ function AdminAuditLogs() {
   const [clientName, setClientName] = useState('');
   const debouncedClientName = useDebouncedValue(clientName, 300);
   const [isLoading, setIsLoading] = useState(false);
-  const [errorMessage, setErrorMessage] = useState('');
+  const [deletingRequestId, setDeletingRequestId] = useState('');
+  const [viewedRequest, setViewedRequest] = useState<LoanRequest | null>(null);
+  const [requestPendingDeletion, setRequestPendingDeletion] =
+    useState<LoanRequest | null>(null);
+  const [errorMessage, setErrorMessage] = useAutoDismissMessage();
+  const [successMessage, setSuccessMessage] = useAutoDismissMessage();
   const [sheetConfigured, setSheetConfigured] = useState(true);
+  const [refreshToken, setRefreshToken] = useState(0);
 
   useEffect(() => {
     let isCurrent = true;
@@ -2190,14 +2240,59 @@ function AdminAuditLogs() {
     return () => {
       isCurrent = false;
     };
-  }, [currentPage, appliedDateFrom, appliedDateTo, debouncedClientName]);
+  }, [currentPage, appliedDateFrom, appliedDateTo, debouncedClientName, refreshToken]);
 
-  if (errorMessage) {
-    return <p className="error-text">{errorMessage}</p>;
-  }
+  const openDeleteConfirmation = (request: LoanRequest) => {
+    if (request.status.trim().toLowerCase() !== 'pending') {
+      setErrorMessage('Only pending loan requests can be deleted.');
+      return;
+    }
+
+    setErrorMessage('');
+    setSuccessMessage('');
+    setRequestPendingDeletion(request);
+  };
+
+  const closeDeleteConfirmation = () => {
+    if (deletingRequestId) {
+      return;
+    }
+
+    setRequestPendingDeletion(null);
+  };
+
+  const confirmDeleteRequest = async () => {
+    const request = requestPendingDeletion;
+
+    if (!request) {
+      return;
+    }
+
+    setErrorMessage('');
+    setSuccessMessage('');
+    setDeletingRequestId(request.requestId);
+
+    try {
+      const result = await deleteLoanRequest(request.requestId);
+      setSuccessMessage(result.message);
+      setRequestPendingDeletion(null);
+
+      if (requests.length === 1 && currentPage > 1) {
+        setCurrentPage((page) => page - 1);
+      } else {
+        setRefreshToken((value) => value + 1);
+      }
+    } catch (error) {
+      setErrorMessage(getErrorMessage(error));
+    } finally {
+      setDeletingRequestId('');
+    }
+  };
 
   return (
     <div className="admin-stack">
+      <ValidationToast message={successMessage} tone="success" />
+      <ValidationToast message={errorMessage} />
       <DateRangeFilter
         dateFrom={dateFrom}
         dateTo={dateTo}
@@ -2227,7 +2322,7 @@ function AdminAuditLogs() {
           }
         }}
       />
-      <div className="admin-table" role="table" aria-label="Audit logs">
+      <div className="admin-table admin-audit-table" role="table" aria-label="Audit logs">
         <div className="admin-row admin-head" role="row">
           <span role="columnheader">Request ID</span>
           <span role="columnheader">Member</span>
@@ -2235,6 +2330,7 @@ function AdminAuditLogs() {
           <span role="columnheader">Requested By</span>
           <span role="columnheader">Status</span>
           <span role="columnheader">Requested</span>
+          <span role="columnheader">Actions</span>
         </div>
 
         {requests.length ? (
@@ -2248,6 +2344,27 @@ function AdminAuditLogs() {
                 <StatusBadge status={request.status} />
               </span>
               <span data-label="Requested">{request.requestedAt || '-'}</span>
+              <span data-label="Actions" className="row-actions">
+                <button
+                  className="icon-action"
+                  type="button"
+                  onClick={() => setViewedRequest(request)}
+                >
+                  <Eye size={16} aria-hidden="true" />
+                  View
+                </button>
+                {request.status.trim().toLowerCase() === 'pending' ? (
+                  <button
+                    className="icon-action danger-action"
+                    type="button"
+                    onClick={() => openDeleteConfirmation(request)}
+                    disabled={deletingRequestId === request.requestId}
+                  >
+                    <Trash2 size={16} aria-hidden="true" />
+                    {deletingRequestId === request.requestId ? 'Deleting' : 'Delete'}
+                  </button>
+                ) : null}
+              </span>
             </div>
           ))
         ) : (
@@ -2263,6 +2380,79 @@ function AdminAuditLogs() {
         )}
       </div>
       <Pagination pagination={pagination} onPageChange={setCurrentPage} />
+
+      {viewedRequest ? (
+        <RequestDetailPanel
+          dashboard="admin"
+          errorMessage=""
+          isApproving={false}
+          isDisapproving={false}
+          isForwarding={false}
+          isReturning={false}
+          isReturningToManager={false}
+          request={viewedRequest}
+          onClose={() => setViewedRequest(null)}
+          onApprove={() => undefined}
+          onDisapprove={() => undefined}
+          onEdit={() => undefined}
+          onForward={() => undefined}
+          onReturn={() => undefined}
+          onReturnToManager={() => undefined}
+        />
+      ) : null}
+
+      {requestPendingDeletion ? (
+        <div className="modal-overlay" onClick={closeDeleteConfirmation}>
+          <div
+            className="modal-panel confirmation-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="delete-request-title"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="modal-header">
+              <h3 id="delete-request-title">Delete Pending Request?</h3>
+              <button
+                className="icon-action"
+                type="button"
+                onClick={closeDeleteConfirmation}
+                disabled={Boolean(deletingRequestId)}
+                title="Close"
+              >
+                <X size={18} aria-hidden="true" />
+              </button>
+            </div>
+            <div className="modal-content">
+              <p>
+                Delete request <strong>{requestPendingDeletion.requestId}</strong> for{' '}
+                <strong>{requestPendingDeletion.memberName || 'this member'}</strong>?
+              </p>
+              <p className="notice-text">
+                Only Pending requests can be deleted. This action removes the request from active records.
+              </p>
+            </div>
+            <div className="modal-footer">
+              <button
+                className="secondary-button"
+                type="button"
+                onClick={closeDeleteConfirmation}
+                disabled={Boolean(deletingRequestId)}
+              >
+                Cancel
+              </button>
+              <button
+                className="primary-button danger-confirm-button"
+                type="button"
+                onClick={() => void confirmDeleteRequest()}
+                disabled={Boolean(deletingRequestId)}
+              >
+                <Trash2 size={16} aria-hidden="true" />
+                {deletingRequestId ? 'Deleting' : 'Delete Request'}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -2274,8 +2464,8 @@ function AdminBranches() {
   const [editingBranch, setEditingBranch] = useState<Branch | null>(null);
   const [isAdding, setIsAdding] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
-  const [errorMessage, setErrorMessage] = useState('');
-  const [successMessage, setSuccessMessage] = useState('');
+  const [errorMessage, setErrorMessage] = useAutoDismissMessage();
+  const [successMessage, setSuccessMessage] = useAutoDismissMessage();
   const [refreshToken, setRefreshToken] = useState(0);
 
   useEffect(() => {
@@ -2365,8 +2555,8 @@ function AdminBranches() {
         </span>
       </div>
 
-      {errorMessage ? <p className="error-text">{errorMessage}</p> : null}
-      {successMessage ? <p className="notice-text">{successMessage}</p> : null}
+      <ValidationToast message={errorMessage} />
+      <ValidationToast message={successMessage} tone="success" />
 
       {(isAdding || editingBranch) ? (
         <AdminBranchModal
@@ -2494,7 +2684,7 @@ function AdminBranchForm({
   const [form, setForm] = useState<AdminBranchInput>(() =>
     createBranchForm(branch, nextBranchCode),
   );
-  const [formError, setFormError] = useState('');
+  const [formError, setFormError] = useAutoDismissMessage();
   const [isSubmitting, setIsSubmitting] = useState(false);
   const isNew = !branch;
 
@@ -2576,7 +2766,7 @@ function AdminBranchForm({
         </label>
       </div>
 
-      {formError ? <p className="error-text">{formError}</p> : null}
+      <ValidationToast message={formError} />
 
       <div className="form-actions">
         <button className="secondary-button" type="button" onClick={onCancel}>
@@ -2630,8 +2820,8 @@ function AdminLoanTypes() {
   const [editingLoanType, setEditingLoanType] = useState<LoanType | null>(null);
   const [isAdding, setIsAdding] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
-  const [errorMessage, setErrorMessage] = useState('');
-  const [successMessage, setSuccessMessage] = useState('');
+  const [errorMessage, setErrorMessage] = useAutoDismissMessage();
+  const [successMessage, setSuccessMessage] = useAutoDismissMessage();
   const [refreshToken, setRefreshToken] = useState(0);
 
   useEffect(() => {
@@ -2699,8 +2889,8 @@ function AdminLoanTypes() {
         </span>
       </div>
 
-      {errorMessage ? <p className="error-text">{errorMessage}</p> : null}
-      {successMessage ? <p className="notice-text">{successMessage}</p> : null}
+      <ValidationToast message={errorMessage} />
+      <ValidationToast message={successMessage} tone="success" />
 
       {(isAdding || editingLoanType) ? (
         <AdminLoanTypeModal
@@ -2840,7 +3030,7 @@ function AdminLoanTypeForm({
     interestRate: loanType?.interestRate || '',
     isActive: loanType?.isActive ?? true,
   }));
-  const [formError, setFormError] = useState('');
+  const [formError, setFormError] = useAutoDismissMessage();
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   const updateField = (
@@ -2971,7 +3161,7 @@ function AdminLoanTypeForm({
         </label>
       </div>
 
-      {formError ? <p className="error-text">{formError}</p> : null}
+      <ValidationToast message={formError} />
 
       <div className="form-actions">
         <button className="secondary-button" type="button" onClick={onCancel}>
@@ -3025,8 +3215,8 @@ function AdminMembers({
   const [isLoading, setIsLoading] = useState(false);
   const [isImporting, setIsImporting] = useState(false);
   const [isDeletingAll, setIsDeletingAll] = useState(false);
-  const [errorMessage, setErrorMessage] = useState('');
-  const [successMessage, setSuccessMessage] = useState('');
+  const [errorMessage, setErrorMessage] = useAutoDismissMessage();
+  const [successMessage, setSuccessMessage] = useAutoDismissMessage();
   const [searchQuery, setSearchQuery] = useState('');
   const [refreshToken, setRefreshToken] = useState(0);
 
@@ -3283,8 +3473,8 @@ function AdminMembers({
         </span>
       </div>
 
-      {errorMessage ? <p className="error-text">{errorMessage}</p> : null}
-      {successMessage ? <p className="notice-text">{successMessage}</p> : null}
+      <ValidationToast message={errorMessage} />
+      <ValidationToast message={successMessage} tone="success" />
 
       {(isAdding || editingMember) ? (
         <AdminMemberModal
@@ -3416,7 +3606,7 @@ function AdminMemberForm({
   const [form, setForm] = useState<AdminMemberInput>(() =>
     createMemberForm(member, lockedBranchId),
   );
-  const [formError, setFormError] = useState('');
+  const [formError, setFormError] = useAutoDismissMessage();
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [branches, setBranches] = useState<Branch[]>([]);
   const [isBranchesLoading, setIsBranchesLoading] = useState(false);
@@ -3478,7 +3668,7 @@ function AdminMemberForm({
   const updateField = (field: keyof AdminMemberInput, value: string) => {
     if (
       isReadOnly ||
-      (isNew && field === 'branch_id' && Boolean(lockedBranchId))
+      (field === 'branch_id' && Boolean(lockedBranchId))
     ) {
       return;
     }
@@ -3520,7 +3710,7 @@ function AdminMemberForm({
         cif_key: form.cif_key.trim(),
         client_name: form.client_name.trim(),
         branch_id:
-          isNew && lockedBranchId ? lockedBranchId : form.branch_id,
+          lockedBranchId || form.branch_id,
       });
 
       if (!result.success) {
@@ -3624,7 +3814,7 @@ function AdminMemberForm({
             disabled={
               isReadOnly ||
               isBranchesLoading ||
-              (isNew && Boolean(lockedBranchId))
+              Boolean(lockedBranchId)
             }
           >
             <option value="">- Select Branch -</option>
@@ -3700,7 +3890,7 @@ function AdminMemberForm({
         </label>
       </div>
 
-      {formError ? <p className="error-text">{formError}</p> : null}
+      <ValidationToast message={formError} />
 
       <div className="form-actions">
         <button className="secondary-button" type="button" onClick={onCancel}>
@@ -3902,8 +4092,8 @@ function AdminUsers() {
   const [isImporting, setIsImporting] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
   const [isDeletingAll, setIsDeletingAll] = useState(false);
-  const [errorMessage, setErrorMessage] = useState('');
-  const [successMessage, setSuccessMessage] = useState('');
+  const [errorMessage, setErrorMessage] = useAutoDismissMessage();
+  const [successMessage, setSuccessMessage] = useAutoDismissMessage();
   const [searchQuery, setSearchQuery] = useState('');
   const [refreshToken, setRefreshToken] = useState(0);
 
@@ -4149,8 +4339,8 @@ function AdminUsers() {
         </span>
       </div>
 
-      {errorMessage ? <p className="error-text">{errorMessage}</p> : null}
-      {successMessage ? <p className="notice-text">{successMessage}</p> : null}
+      <ValidationToast message={errorMessage} />
+      <ValidationToast message={successMessage} tone="success" />
 
       {(isAdding || editingUser) ? (
         <AdminUserModal
@@ -4275,7 +4465,7 @@ function AdminUserForm({
     status: user?.status || 'ACTIVE',
     isNew,
   });
-  const [formError, setFormError] = useState('');
+  const [formError, setFormError] = useAutoDismissMessage();
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [branches, setBranches] = useState<Branch[]>([]);
   const [isBranchesLoading, setIsBranchesLoading] = useState(false);
@@ -4430,7 +4620,7 @@ function AdminUserForm({
         </label>
       </div>
 
-      {formError ? <p className="error-text">{formError}</p> : null}
+      <ValidationToast message={formError} />
 
       <div className="form-actions">
         <button className="secondary-button" type="button" onClick={onCancel}>
@@ -4455,8 +4645,8 @@ function AdminSettings() {
   const [draftSignature, setDraftSignature] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
-  const [message, setMessage] = useState('');
-  const [errorMessage, setErrorMessage] = useState('');
+  const [message, setMessage] = useAutoDismissMessage();
+  const [errorMessage, setErrorMessage] = useAutoDismissMessage();
 
   useEffect(() => {
     let isCurrent = true;
@@ -4537,8 +4727,8 @@ function AdminSettings() {
   return (
     <div className="admin-stack">
       {isLoading ? <p className="notice-text">Loading settings.</p> : null}
-      {errorMessage ? <p className="error-text">{errorMessage}</p> : null}
-      {message ? <p className="notice-text">{message}</p> : null}
+      <ValidationToast message={errorMessage} />
+      <ValidationToast message={message} tone="success" />
 
       <div className="settings-panel">
         <label className="field-control">
@@ -4614,11 +4804,12 @@ function Dashboard({
   const [showRequestForm, setShowRequestForm] = useState(false);
   const [viewedRequest, setViewedRequest] = useState<LoanRequest | null>(null);
   const [editingRequest, setEditingRequest] = useState<LoanRequest | null>(null);
+  const [requestSuccessMessage, setRequestSuccessMessage] = useAutoDismissMessage();
   const [requestAction, setRequestAction] = useState<{
     requestId: string;
     type: 'forward' | 'return' | 'approve' | 'disapprove' | 'return-manager';
   } | null>(null);
-  const [requestActionError, setRequestActionError] = useState('');
+  const [requestActionError, setRequestActionError] = useAutoDismissMessage();
   const [refreshToken, setRefreshToken] = useState(0);
   const { isLoading, pagination, requestError, requests, sheetConfigured } =
     useLoanRequests(
@@ -4652,9 +4843,10 @@ function Dashboard({
   const isTellerDashboard = dashboard === 'teller';
   const isMembersView = activeView === 'members';
 
-  const handleRequestCreated = () => {
+  const handleRequestCreated = (message: string) => {
     setShowRequestForm(false);
     setEditingRequest(null);
+    setRequestSuccessMessage(message);
     setActiveView('pending');
     setCurrentPage(1);
     setRefreshToken((value) => value + 1);
@@ -4948,9 +5140,7 @@ function Dashboard({
           </p>
         ) : null}
 
-        {errorMessage ? (
-          <p className="error-text dashboard-notice">{errorMessage}</p>
-        ) : null}
+        <ValidationToast message={errorMessage} />
 
         {!isMembersView ? (
           <section className="dashboard-stats" aria-label="Dashboard summary">
@@ -4976,6 +5166,7 @@ function Dashboard({
                   className="secondary-button inline-button"
                   type="button"
                   onClick={() => {
+                    setRequestSuccessMessage('');
                     setEditingRequest(null);
                     setShowRequestForm((value) => !value);
                   }}
@@ -5009,7 +5200,8 @@ function Dashboard({
             />
           ) : (
             <>
-              {requestError ? <p className="error-text">{requestError}</p> : null}
+              <ValidationToast message={requestSuccessMessage} tone="success" />
+              <ValidationToast message={requestError} />
               <DateRangeFilter
                 dateFrom={dateFrom}
                 dateTo={dateTo}
@@ -5077,6 +5269,7 @@ function Dashboard({
               setViewedRequest(null);
             }}
             onEdit={() => {
+              setRequestSuccessMessage('');
               setEditingRequest(viewedRequest);
               setShowRequestForm(true);
               setRequestActionError('');
@@ -5152,7 +5345,7 @@ function NewRequestForm({
 }: {
   editingRequest?: LoanRequest | null;
   onCancel: () => void;
-  onCreated: () => void;
+  onCreated: (message: string) => void;
   user: AuthenticatedUser;
 }) {
   const [request, setRequest] = useState<NewLoanRequest>(() =>
@@ -5171,8 +5364,8 @@ function NewRequestForm({
     createEmptyAttachmentRow(),
   ]);
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [formError, setFormError] = useState('');
-  const [attachmentMessage, setAttachmentMessage] = useState('');
+  const [formError, setFormError] = useAutoDismissMessage();
+  const [attachmentMessage, setAttachmentMessage] = useAutoDismissMessage();
   const [previewingAttachmentId, setPreviewingAttachmentId] = useState('');
   const [memberSearchResults, setMemberSearchResults] = useState<Member[]>([]);
   const [showMemberDropdown, setShowMemberDropdown] = useState(false);
@@ -5266,6 +5459,7 @@ function NewRequestForm({
     request.cif_key.trim().length > 0 &&
     request.fullname.trim().length > 0 &&
     !isLoadingEditingRequest &&
+    !attachments.some((attachment) => attachment.isCompressing) &&
     !isSubmitting;
 
   useEffect(() => {
@@ -5401,16 +5595,38 @@ function NewRequestForm({
     );
   };
 
-  const handleAttachmentFileChange = (
+  const handleAttachmentFileChange = async (
     index: number,
-    files: FileList | null,
+    event: ChangeEvent<HTMLInputElement>,
   ) => {
-    const file = files?.[0];
+    const input = event.currentTarget;
+    const file = input.files?.[0];
 
     if (!file) {
       return;
     }
 
+    const rowId = attachments[index]?.rowId;
+
+    if (!rowId) {
+      return;
+    }
+
+    const isCompressibleImage = isCompressibleAttachmentImage(file);
+
+    if (!isCompressibleImage && file.size > MAX_ATTACHMENT_FILE_SIZE) {
+      input.value = '';
+      setAttachmentMessage(
+        `${file.name} is larger than the 5 MB attachment limit.`,
+      );
+      return;
+    }
+
+    setAttachmentMessage(
+      isCompressibleImage
+        ? 'Compressing image before upload...'
+        : 'File selected. PDFs are preserved without modification.',
+    );
     setAttachments((current) =>
       current.map((attachment, rowIndex) =>
         rowIndex === index
@@ -5420,10 +5636,88 @@ function NewRequestForm({
               originalFilename: file.name,
               mimeType: file.type,
               size: String(file.size),
+              isCompressing: isCompressibleImage,
             }
           : attachment,
       ),
     );
+
+    if (!isCompressibleImage) {
+      return;
+    }
+
+    try {
+      const uploadFile = await compressAttachmentImage(file);
+      const savedBytes = file.size - uploadFile.size;
+
+      if (uploadFile.size > MAX_ATTACHMENT_FILE_SIZE) {
+        input.value = '';
+        setAttachments((current) =>
+          current.map((attachment) =>
+            attachment.rowId === rowId && attachment.file === file
+              ? {
+                  ...attachment,
+                  file: undefined,
+                  originalFilename: '',
+                  mimeType: '',
+                  size: '',
+                  isCompressing: false,
+                }
+              : attachment,
+          ),
+        );
+        setAttachmentMessage(
+          `${file.name} remains larger than 5 MB after compression. Choose a smaller file.`,
+        );
+        return;
+      }
+
+      setAttachments((current) =>
+        current.map((attachment) =>
+          attachment.rowId === rowId && attachment.file === file
+            ? {
+                ...attachment,
+                file: uploadFile,
+                originalFilename: file.name,
+                mimeType: uploadFile.type || file.type,
+                size: String(uploadFile.size),
+                isCompressing: false,
+              }
+            : attachment,
+        ),
+      );
+      setAttachmentMessage(
+        savedBytes > 0
+          ? `Image compressed from ${formatFileSize(String(file.size))} to ${formatFileSize(String(uploadFile.size))}.`
+          : 'The image was already optimized, so the original file was preserved.',
+      );
+    } catch (error) {
+      const canUseOriginal = file.size <= MAX_ATTACHMENT_FILE_SIZE;
+
+      if (!canUseOriginal) {
+        input.value = '';
+      }
+
+      setAttachments((current) =>
+        current.map((attachment) =>
+          attachment.rowId === rowId && attachment.file === file
+            ? {
+                ...attachment,
+                file: canUseOriginal ? file : undefined,
+                originalFilename: canUseOriginal ? file.name : '',
+                mimeType: canUseOriginal ? file.type : '',
+                size: canUseOriginal ? String(file.size) : '',
+                isCompressing: false,
+              }
+            : attachment,
+        ),
+      );
+      setAttachmentMessage(
+        canUseOriginal
+          ? `Image compression was unavailable; the original file will be uploaded. ${getErrorMessage(error)}`
+          : `Image compression failed and the original exceeds the 5 MB limit. Choose a smaller file.`,
+      );
+    }
   };
 
   const handlePreviewAttachment = async (attachment: AttachmentFormRow) => {
@@ -5517,6 +5811,17 @@ function NewRequestForm({
 
       return Boolean(attachment.file) !== Boolean(attachment.attachmentType);
     });
+    const oversizedAttachment = attachments.find(
+      (attachment) => attachment.file && attachment.file.size > MAX_ATTACHMENT_FILE_SIZE,
+    );
+
+    if (oversizedAttachment) {
+      setFormError(
+        `${oversizedAttachment.originalFilename || 'An attachment'} exceeds the 5 MB attachment limit.`,
+      );
+      setIsSubmitting(false);
+      return;
+    }
 
     if (incompleteAttachment) {
       setFormError('Each attachment must have both a file and an attachment type.');
@@ -5558,13 +5863,15 @@ function NewRequestForm({
         },
       };
 
-      if (isEditing) {
-        await updateLoanRequest(payload);
-      } else {
-        await createLoanRequest(payload);
-      }
+      const result = isEditing
+        ? await updateLoanRequest(payload)
+        : await createLoanRequest(payload);
 
-      onCreated();
+      onCreated(
+        isEditing
+          ? `Request ${result.requestId} updated successfully.`
+          : `Request ${result.requestId} created successfully.`,
+      );
     } catch (error) {
       setFormError(getErrorMessage(error));
     } finally {
@@ -5990,7 +6297,7 @@ function NewRequestForm({
             </label>
 
             <label className="field-control attachment-file-control">
-              <span>File</span>
+              <span>File (PDF, JPG or PNG; maximum 5 MB)</span>
               {attachment.id ? (
                 <span className="attachment-file-name">
                   {attachment.originalFilename || 'Saved attachment'}
@@ -5998,8 +6305,9 @@ function NewRequestForm({
               ) : (
                 <input
                   type="file"
+                  accept=".pdf,.jpg,.jpeg,.png,application/pdf,image/jpeg,image/png"
                   onChange={(event) =>
-                    handleAttachmentFileChange(index, event.target.files)
+                    void handleAttachmentFileChange(index, event)
                   }
                 />
               )}
@@ -6007,7 +6315,11 @@ function NewRequestForm({
 
             <div className="attachment-meta">
               <strong>{attachment.originalFilename || 'No file selected'}</strong>
-              <span>{formatFileSize(attachment.size)}</span>
+              <span>
+                {attachment.isCompressing
+                  ? 'Compressing...'
+                  : formatFileSize(attachment.size)}
+              </span>
             </div>
 
             <div className="attachment-actions">
@@ -6033,9 +6345,9 @@ function NewRequestForm({
         ))}
       </div>
 
-      {attachmentMessage ? <p className="notice-text">{attachmentMessage}</p> : null}
+      <ValidationToast message={attachmentMessage} tone="info" />
 
-      {formError ? <p className="error-text">{formError}</p> : null}
+      <ValidationToast message={formError} />
 
       <div className="form-actions">
         <button
@@ -6160,7 +6472,7 @@ function RequestDetailPanel({
   onReturn,
   onReturnToManager,
 }: {
-  dashboard: DashboardKind;
+  dashboard: UserDashboardKind;
   errorMessage: string;
   isApproving: boolean;
   isDisapproving: boolean;
@@ -6178,7 +6490,7 @@ function RequestDetailPanel({
 }) {
   const [details, setDetails] = useState<LoanRequestDetails | null>(null);
   const [isLoadingDetails, setIsLoadingDetails] = useState(false);
-  const [detailsError, setDetailsError] = useState('');
+  const [detailsError, setDetailsError] = useAutoDismissMessage();
   const [managerNotes, setManagerNotes] = useState(request.managerNotes || '');
   const [approverNotes, setApproverNotes] = useState(request.approverNotes || '');
   const [reviewAndRecommendations, setReviewAndRecommendations] = useState(request.reviewAndRecommendations || '');
@@ -6191,7 +6503,7 @@ function RequestDetailPanel({
   const [appSettings, setAppSettings] = useState<AppSettings>({});
   const [notesAction, setNotesAction] = useState<RequestNotesAction | null>(null);
   const [notesDraft, setNotesDraft] = useState('');
-  const [notesError, setNotesError] = useState('');
+  const [notesError, setNotesError] = useAutoDismissMessage();
 
   useEffect(() => {
     let isCurrent = true;
@@ -6373,7 +6685,7 @@ function RequestDetailPanel({
             <p className="notice-text">Loading full request details...</p>
           ) : null}
 
-          {detailsError ? <p className="error-text">{detailsError}</p> : null}
+          <ValidationToast message={detailsError} />
 
           <div className="screen-only-content">
             <DetailSection
@@ -6629,7 +6941,7 @@ function RequestDetailPanel({
           ) : null}
         </div>
 
-        {errorMessage ? <p className="error-text modal-error">{errorMessage}</p> : null}
+        <ValidationToast message={errorMessage} />
 
         <div className="modal-footer detail-action-footer">
           {canEdit ? (
@@ -6756,10 +7068,7 @@ function RequestDetailPanel({
                   <small>{notesActionDetails.helpText}</small>
                 </label>
                 {notesError ? (
-                  <p className="error-text">{notesError}</p>
-                ) : null}
-                {errorMessage ? (
-                  <p className="error-text">{errorMessage}</p>
+                  <ValidationToast message={notesError} />
                 ) : null}
               </div>
               <div className="modal-footer action-notes-footer">
@@ -7248,7 +7557,7 @@ function AttachmentDetailList({
 }: {
   attachments: LoanAttachment[];
 }) {
-  const [message, setMessage] = useState('');
+  const [message, setMessage] = useAutoDismissMessage();
   const [previewingId, setPreviewingId] = useState('');
 
   const handlePreview = async (attachment: LoanAttachment) => {
@@ -7285,7 +7594,7 @@ function AttachmentDetailList({
           </div>
         ))}
       </div>
-      {message ? <p className="error-text">{message}</p> : null}
+      <ValidationToast message={message} />
     </section>
   );
 }
@@ -7355,7 +7664,7 @@ function useLoanRequests(
   const [requests, setRequests] = useState<LoanRequest[]>([]);
   const [pagination, setPagination] = useState<PaginationInfo | undefined>();
   const [isLoading, setIsLoading] = useState(false);
-  const [requestError, setRequestError] = useState('');
+  const [requestError, setRequestError] = useAutoDismissMessage();
   const [sheetConfigured, setSheetConfigured] = useState(true);
 
   useEffect(() => {
@@ -7764,6 +8073,37 @@ function createEmptyAttachmentRow(): AttachmentFormRow {
     size: '',
     uploadedAt: '',
   };
+}
+
+function isCompressibleAttachmentImage(file: File) {
+  return file.type === 'image/jpeg' || file.type === 'image/png';
+}
+
+function compressAttachmentImage(file: File): Promise<File> {
+  if (!isCompressibleAttachmentImage(file)) {
+    return Promise.resolve(file);
+  }
+
+  return new Promise((resolve, reject) => {
+    new Compressor(file, {
+      quality: 0.7,
+      maxWidth: 2000,
+      maxHeight: 2000,
+      mimeType: file.type,
+      convertTypes: [],
+      success(result) {
+        const compressedFile = new File([result], file.name, {
+          type: result.type || file.type,
+          lastModified: file.lastModified,
+        });
+
+        // Re-encoding an already optimized image can make it larger. In that
+        // case, retain the byte-for-byte original instead.
+        resolve(compressedFile.size < file.size ? compressedFile : file);
+      },
+      error: reject,
+    });
+  });
 }
 
 function createClientRowId() {

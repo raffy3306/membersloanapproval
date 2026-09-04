@@ -37,7 +37,7 @@ class AttachmentController extends BaseController
 
         $validated = $request->validate([
             'attachments' => ['required', 'array', 'min:1', 'max:10'],
-            'attachments.*' => ['required', 'file', 'mimes:pdf,jpg,jpeg,png', 'max:20480'],
+            'attachments.*' => ['required', 'file', 'mimes:pdf,jpg,jpeg,png', 'max:5120'],
             'attachment_types' => ['required', 'array', 'min:1'],
             'attachment_types.*' => ['required', Rule::in(self::TYPES)],
         ]);

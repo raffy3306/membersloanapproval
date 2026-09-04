@@ -54,10 +54,10 @@ Route::middleware(['auth:api', 'throttle:120,1'])->group(function () {
     Route::get('/members', [MemberController::class, 'index']);
     Route::get('/members/{id}', [MemberController::class, 'show']);
     Route::post('/members', [MemberController::class, 'store'])->middleware('role:teller,admin');
+    Route::put('/members/{id}', [MemberController::class, 'update'])->middleware('role:teller,admin');
     Route::middleware('role:admin')->group(function () {
         Route::post('/members/import', [MemberController::class, 'import'])->middleware('throttle:5,1');
         Route::delete('/members', [MemberController::class, 'destroyAll']);
-        Route::put('/members/{id}', [MemberController::class, 'update']);
         Route::delete('/members/{id}', [MemberController::class, 'destroy']);
     });
 

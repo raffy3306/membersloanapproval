@@ -824,6 +824,18 @@ export async function getLoanRequestDetails(
   return mapLoanRequestDetails(result);
 }
 
+export async function deleteLoanRequest(requestId: string) {
+  const result = await apiCall<unknown>(
+    `/loan-requests/${encodeURIComponent(requestId)}`,
+    'DELETE',
+  );
+
+  return {
+    success: true,
+    message: result.message || 'Pending loan request deleted successfully.',
+  };
+}
+
 export async function searchMembers(
   payload: SearchMembersPayload,
 ): Promise<SearchMembersResponse> {

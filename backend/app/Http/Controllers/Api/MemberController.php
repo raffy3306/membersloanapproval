@@ -201,6 +201,25 @@ class MemberController extends BaseController
             return $this->error('Member not found', 404);
         }
 
+        $user = $request->user();
+        $isTeller = $user && strtolower(trim((string) $user->role)) === 'teller';
+
+        if ($isTeller) {
+            if (is_null($user->branch_id)) {
+                return $this->error(
+                    'Your teller account does not have an assigned branch.',
+                    422
+                );
+            }
+
+            if ((int) $member->branch_id !== (int) $user->branch_id) {
+                return $this->error(
+                    'You do not have permission to edit this member.',
+                    403
+                );
+            }
+        }
+
         $validated = $request->validate($this->validationRules([
             'cif_key' => [
                 'sometimes',
@@ -213,7 +232,15 @@ class MemberController extends BaseController
             'fullname' => ['nullable', 'string', 'max:255'],
         ]));
 
-        $member->update($this->toMemberData($validated));
+        $memberData = $this->toMemberData($validated);
+
+        // A teller may edit members in their branch, but cannot transfer a
+        // member to another branch by submitting a different branch value.
+        if ($isTeller) {
+            $memberData['branch_id'] = (int) $user->branch_id;
+        }
+
+        $member->update($memberData);
 
         return $this->success($member->load('branch'), 'Member updated successfully');
     }
